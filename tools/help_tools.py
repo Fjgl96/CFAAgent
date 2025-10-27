@@ -14,9 +14,6 @@ Aquí tienes algunos ejemplos de lo que puedes pedirme:
 * **Gordon:** "Valora una acción con Gordon Growth. D1=$2.50, Ke=12%, g=4%."
 * **Call:** "Precio de opción call: S=100, K=105, T=0.5 años, r=5%, sigma=0.2."
 
-**Cálculos Avanzados (Múltiples pasos):**
-1.  **Usuario:** "Calcula el Ke para una acción con beta 1.5, tasa libre de riesgo 4% y retorno de mercado 11%."
-2.  **Usuario:** "Genial. Ahora, usando ese resultado, valora esa acción si su D1 es $3 y su 'g' es 5%."
 """
 
 @tool
