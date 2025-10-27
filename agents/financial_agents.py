@@ -1,5 +1,6 @@
 # agents/financial_agents.py
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage
 # Importar create_react_agent desde langchain.agents (preferido en versiones > 0.2.1)
 try:
     from langchain.agents import create_react_agent
@@ -22,11 +23,36 @@ from tools.financial_tools import ( # Importa las funciones tool directamente
     _calcular_opcion_call
 )
 
+from tools.help_tools import obtener_ejemplos_de_uso # O desde 'help_tools' si lo separaste
+
 llm = get_llm() # Obtener la instancia singleton del LLM configurado
 
 # --- Creación de Agentes Especialistas (con Prompts Detallados) ---
 
 messages_placeholder = MessagesPlaceholder(variable_name="messages")
+
+def nodo_ayuda_directo(state: dict) -> dict:
+    """
+    Un nodo simple que NO usa un LLM.
+    Simplemente llama a la herramienta de ayuda y devuelve su contenido
+    directamente como un AIMessage.
+    """
+    print("\n--- NODO AYUDA (DIRECTO) ---")
+    try:
+        # Llama a la herramienta de ayuda directamente. 
+        # .invoke({}) es necesario si la herramienta no toma argumentos.
+        guia_de_preguntas = obtener_ejemplos_de_uso.invoke({})
+        
+        # Devuelve el resultado en el formato correcto para el estado
+        return {
+            "messages": [AIMessage(content=guia_de_preguntas)]
+        }
+    except Exception as e:
+        print(f"❌ ERROR en nodo_ayuda_directo: {e}")
+        return {
+            "messages": [AIMessage(content=f"Error al obtener la guía de ayuda: {e}")]
+        }
+
 
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     """Función helper para crear un agente reactivo con prompt de sistema."""
@@ -103,6 +129,7 @@ agent_nodes = {
     "Agente_Equity": agent_equity,
     "Agente_Portafolio": agent_portafolio,
     "Agente_Derivados": agent_derivados,
+    "Agente_Ayuda": nodo_ayuda_directo,
 }
 
 # --- Supervisor ---
@@ -134,13 +161,15 @@ Especialistas y sus ÚNICAS herramientas:
 - Agente_Equity: `calcular_gordon_growth`
 - Agente_Portafolio: `calcular_capm`, `calcular_sharpe_ratio`
 - Agente_Derivados: `calcular_opcion_call`
+- Agente_Ayuda: `obtener_ejemplos_de_uso`
 
 PROCESO DE DECISIÓN:
-1. Lee el último mensaje del usuario. ¿Qué cálculo financiero pide?
-2. Revisa el historial. ¿Hay tareas pendientes de mensajes anteriores? ¿El último agente completó solo una parte?
-3. Basado en la tarea pendiente MÁS INMEDIATA, elige el agente especialista CORRECTO.
-4. Si el último agente indicó que completó su parte Y no quedan tareas pendientes claras en la solicitud original o historial, elige 'FINISH'.
-5. Si el último agente indicó un error o incapacidad ("No es mi especialidad", "Faltan parámetros"), y TÚ (supervisor) no ves una forma clara de redirigir a otro agente para completar la solicitud, elige 'FINISH' para detener el proceso.
+**1. PRIORIDAD MÁXIMA: Si el último mensaje del usuario es 'ayuda', 'ejemplos', 'qué puedes hacer', o una pregunta similar sobre tus capacidades, elige 'Agente_Ayuda'.**
+2. Si es una solicitud de cálculo: Lee el último mensaje del usuario. ¿Qué cálculo financiero pide?
+3. Revisa el historial. ¿Hay tareas pendientes de mensajes anteriores? ¿El último agente completó solo una parte?
+4. Basado en la tarea pendiente MÁS INMEDIATA, elige el agente especialista CORRECTO.
+5. Si el último agente indicó que completó su parte Y no quedan tareas pendientes claras en la solicitud original o historial, elige 'FINISH'.
+6. Si el último agente indicó un error o incapacidad ("No es mi especialidad", "Faltan parámetros"), y TÚ (supervisor) no ves una forma clara de redirigir a otro agente para completar la solicitud, elige 'FINISH' para detener el proceso.
 SOLO devuelve el nombre del agente o "FINISH".
 """
 

@@ -143,10 +143,14 @@ def build_graph():
 
     # Añadir aristas de retorno desde cada agente al supervisor
     for name in agent_nodes:
-        workflow.add_edge(name, "Supervisor")
-
+        if name == "Agente_Ayuda":
+     # ¡Ruta especial! El Agente de Ayuda va directo al final.
+            # ¡Ruta especial! El Agente de Ayuda va directo al final.
+            workflow.add_edge(name, END)
+        else:
+        # Los agentes normales vuelven al supervisor
+            workflow.add_edge(name, "Supervisor")
     # Compilar el grafo con un checkpointer de memoria
-    # MemorySaver es bueno para Streamlit ya que cada sesión es independiente
     memory = MemorySaver()
     try:
         compiled_graph = workflow.compile(checkpointer=memory)
