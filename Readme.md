@@ -33,7 +33,7 @@ Una aplicación web interactiva construida con Streamlit y LangGraph que actúa 
 
 
 <p align="center">
-  <img src="docs/architecture-diagram.png" alt="Arquitectura del Sistema" width="800"/>
+  <img src="architecture-diagram.png" alt="Arquitectura del Sistema" width="800"/>
 </p>
 
 El sistema utiliza una arquitectura multi-agente supervisada implementada con LangGraph:
