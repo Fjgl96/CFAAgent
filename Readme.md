@@ -31,7 +31,14 @@ Una aplicación web interactiva construida con Streamlit y LangGraph que actúa 
 
 ## 🏛️ Arquitectura
 
+
+<p align="center">
+  <img src="docs/architecture-diagram.png" alt="Arquitectura del Sistema" width="800"/>
+</p>
+
 El sistema utiliza una arquitectura multi-agente supervisada implementada con LangGraph:
+
+**Flujo de Ejecución:**
 
 1.  El usuario ingresa una consulta en la interfaz de Streamlit.
 2.  El agente **Supervisor** recibe la consulta y, basado en su contenido y el historial, decide qué agente especialista debe manejarla.
@@ -40,6 +47,13 @@ El sistema utiliza una arquitectura multi-agente supervisada implementada con La
 5.  El agente especialista formula una respuesta final y la devuelve al Supervisor.
 6.  El Supervisor recibe la respuesta. Si la tarea está completa, decide `FINISH`.
 7.  La respuesta final se muestra al usuario en Streamlit.
+
+**Componentes Principales:**
+- **Portal de Entrada:** Streamlit UI para captura de consultas
+- **Supervisor:** Orquestador inteligente con Claude 3 Haiku
+- **6 Agentes Especializados:** Renta Fija, Finanzas Corp, Equity, Portafolio, Derivados, Ayuda
+- **7 Python Tools:** Cálculos deterministas con numpy/scipy
+- **MemorySaver:** Persistencia de contexto durante la sesión
 
 ## 🚀 Ejemplos de Uso (Guía de Preguntas)
 
