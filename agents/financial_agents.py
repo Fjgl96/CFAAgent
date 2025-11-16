@@ -1,10 +1,9 @@
 # agents/financial_agents.py
 """
 Agentes especializados financieros.
-Actualizado para LangChain 1.0+ con RAG integrado y logging estructurado.
+Actualizado para LangGraph 1.0+ (versión moderna).
 """
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.prebuilt import create_react_agent
 from typing import Literal
@@ -33,12 +32,6 @@ except ImportError:
     logger = logging.getLogger('agents')
 
 llm = get_llm()
-
-# ========================================
-# PLACEHOLDER DE MENSAJES
-# ========================================
-
-messages_placeholder = MessagesPlaceholder(variable_name="messages")
 
 # ========================================
 # NODOS ESPECIALES
@@ -101,12 +94,13 @@ def nodo_rag(state: dict) -> dict:
 
 
 # ========================================
-# HELPER: CREAR AGENTE ESPECIALISTA
+# HELPER: CREAR AGENTE ESPECIALISTA (LANGGRAPH 1.0+)
 # ========================================
 
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     """
     Función helper para crear un agente reactivo con prompt de sistema.
+    COMPATIBLE CON LANGGRAPH 1.0.1+ (USA BIND)
     
     Args:
         llm_instance: Instancia del LLM
@@ -119,15 +113,19 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     if not tools_list or not all(hasattr(t, 'invoke') for t in tools_list):
         raise ValueError("tools_list debe contener al menos una herramienta válida (Runnable).")
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt_text),
-        messages_placeholder,
-    ])
+    # LangGraph 1.0+: Bindear system prompt al LLM
+    # Esta es la única forma que funciona en LangGraph 1.0.1+
+    llm_with_system = llm_instance.bind(
+        system=system_prompt_text
+    )
     
-    # LangChain 1.0: create_react_agent de langgraph.prebuilt
-    agent = create_react_agent(llm_instance, tools_list, state_modifier=prompt)
+    # Crear agente SIN modificadores (solo model + tools)
+    agent = create_react_agent(
+        llm_with_system,
+        tools_list
+    )
     
-    logger.debug(f"✅ Agente creado con {len(tools_list)} herramientas")
+    logger.debug(f"✅ Agente creado con {len(tools_list)} herramientas (LangGraph 1.0.1)")
     
     return agent
 
@@ -299,4 +297,4 @@ Elige el agente especialista apropiado según la herramienta necesaria.
 SOLO devuelve el nombre del agente o "FINISH".
 """
 
-logger.info("✅ Módulo financial_agents cargado (LangChain 1.0 + RAG + Logging)")
+logger.info("✅ Módulo financial_agents cargado (LangGraph 1.0.1+ usando bind)")

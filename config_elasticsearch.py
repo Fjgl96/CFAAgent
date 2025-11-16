@@ -30,8 +30,8 @@ ES_URL = f"{ES_SCHEME}://{ES_HOST}:{ES_PORT}"
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "cfa_documents")
 
 # Configuración de embeddings
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIMENSIONS = 384
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+EMBEDDING_DIMENSIONS = 768
 
 # ========================================
 # CONFIGURACIÓN DE CHUNKING

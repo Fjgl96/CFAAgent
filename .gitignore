@@ -40,6 +40,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
+*.pdf
 .pytest_cache/
 
 # Dependencias descargadas (si aplica)

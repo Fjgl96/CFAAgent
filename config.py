@@ -116,8 +116,11 @@ ES_HOST = load_api_key("ES_HOST", "ES_HOST", required=True)
 ES_PORT = int(os.getenv("ES_PORT", "9200"))
 ES_USERNAME = load_api_key("ES_USERNAME", "ES_USERNAME", required=True)
 ES_PASSWORD = load_api_key("ES_PASSWORD", "ES_PASSWORD", required=True)
-ES_SCHEME = os.getenv("ES_SCHEME", "https")
+ES_SCHEME = os.getenv("ES_SCHEME", "httpss") # (Puse "httpss" a propósito, para que falle si no lo pones en .env)
 
+# Corrige el valor por defecto de SCHEME
+if ES_SCHEME == "httpss":
+    ES_SCHEME = "https" # El valor por defecto debe ser "https"
 # URL completa
 ES_URL = f"{ES_SCHEME}://{ES_HOST}:{ES_PORT}"
 
@@ -125,9 +128,8 @@ ES_URL = f"{ES_SCHEME}://{ES_HOST}:{ES_PORT}"
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "cfa_documents")
 
 # Configuración de embeddings
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIMENSIONS = 384
-
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+EMBEDDING_DIMENSIONS = 768
 # Configuración de chunking
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 250
@@ -138,41 +140,33 @@ CHUNK_OVERLAP = 250
 
 def get_elasticsearch_client():
     """
-    Crea y retorna un cliente de Elasticsearch configurado.
-    
-    Returns:
-        Cliente ES o None si falla la conexión
+    Crea y retorna un cliente de Elasticsearch configurado usando URL y Password.
     """
     from elasticsearch import Elasticsearch
     
     try:
-        # Importar certifi para SSL seguro
-        try:
-            import certifi
-            ca_certs = certifi.where()
-            verify_certs = True
-        except ImportError:
-            ca_certs = None
-            verify_certs = False
-            print("⚠️ certifi no disponible, deshabilitando verificación SSL")
-        
+        # --- ESTA ES LA CONFIGURACIÓN QUE FUNCIONÓ EN TU NOTEBOOK ---
         es_client = Elasticsearch(
             [ES_URL],
             basic_auth=(ES_USERNAME, ES_PASSWORD),
-            ca_certs=ca_certs,
-            verify_certs=verify_certs,
+            
+            # Como funcionó en tu notebook, lo ponemos en True
+            verify_certs=True, 
+            
             request_timeout=30,
             max_retries=3,
             retry_on_timeout=True
         )
         
         if es_client.ping():
+            # Devuelve el cliente si el ping es exitoso
             return es_client
         else:
+            print("❌ No se pudo conectar a Elasticsearch (ping falló)")
             return None
     
     except Exception as e:
-        print(f"❌ Error conectando a Elasticsearch: {e}")
+        print(f"❌ Error conectando a Elasticsearch (URL): {e}")
         return None
 
 # ========================================
@@ -180,19 +174,14 @@ def get_elasticsearch_client():
 # ========================================
 
 def get_es_config() -> dict:
-    """
-    Retorna configuración para ElasticsearchStore de LangChain.
-    
-    Returns:
-        Diccionario con configuración ES
-    """
+    """Retorna configuración para ElasticsearchStore de LangChain."""
+    # ¡Asegúrate de que esto devuelva las claves correctas!
     return {
         "es_url": ES_URL,
         "es_user": ES_USERNAME,
         "es_password": ES_PASSWORD,
         "index_name": ES_INDEX_NAME
     }
-
 # ========================================
 # LLM CONFIGURATION
 # ========================================

@@ -165,9 +165,9 @@ class FinancialRAGElasticsearch:
         self.vector_store = ElasticsearchStore(
             index_name=self.index_name,
             embedding=self.embeddings,
-            es_url=es_config["es_url"],
-            es_user=es_config["es_user"],
-            es_password=es_config["es_password"]
+            es_url=es_config["es_url"],           # <-- Parámetro correcto
+            es_user=es_config["es_user"],         # <-- Parámetro correcto
+            es_password=es_config["es_password"]  # <-- Parámetro correcto
         )
         
         return True
