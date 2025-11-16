@@ -1,17 +1,21 @@
 # graph/agent_graph.py
 """
 Grafo de agentes financieros.
-Actualizado para LangChain 1.0+
+Actualizado para LangChain 1.0+ con:
+- Circuit breaker inteligente (rastrea tipos de errores)
+- Logging estructurado
+- Mejor manejo de estados de error
 """
 
-from typing import TypedDict, Annotated
+from typing import TypedDict, Annotated, Literal
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 import streamlit as st
+from datetime import datetime
 
 # Importar de config
-from config import CIRCUIT_BREAKER_MAX_RETRIES
+from config import CIRCUIT_BREAKER_MAX_RETRIES, CIRCUIT_BREAKER_COOLDOWN
 
 # Importar nodos de agente y supervisor
 from agents.financial_agents import (
@@ -19,59 +23,210 @@ from agents.financial_agents import (
     agent_nodes, RouterSchema
 )
 
-# --- Estado del Grafo ---
+# Importar logger
+try:
+    from utils.logger import get_logger
+    logger = get_logger('graph')
+except ImportError:
+    import logging
+    logger = logging.getLogger('graph')
+
+# ========================================
+# ESTADO DEL GRAFO
+# ========================================
 
 class AgentState(TypedDict):
+    """Estado del grafo con tracking de errores mejorado."""
     messages: Annotated[list, lambda x, y: x + y]  # Acumula mensajes
     next_node: str  # Nodo a ejecutar a continuación
-    error_count: int  # Contador para circuit breaker
+    error_count: int  # Contador total de errores
+    error_types: dict  # Rastrea tipos específicos de errores
+    last_error_time: float  # Timestamp del último error
+    circuit_open: bool  # Si el circuit breaker está activado
+
+# ========================================
+# HELPERS: DETECCIÓN DE ERRORES
+# ========================================
+
+def detect_error_type(message: AIMessage) -> str:
+    """
+    Detecta el tipo de error en un mensaje de agente.
+    
+    Args:
+        message: Mensaje del agente a analizar
+    
+    Returns:
+        Tipo de error: 'tool_failure', 'validation', 'capability', 'unknown'
+    """
+    # Extraer contenido del mensaje
+    full_content = ""
+    if isinstance(message.content, str):
+        full_content = message.content.lower()
+    elif isinstance(message.content, list):
+        for part in message.content:
+            if isinstance(part, dict) and 'text' in part:
+                full_content += part['text'].lower()
+            elif isinstance(part, str):
+                full_content += part.lower()
+    
+    # Clasificar por keywords
+    if any(kw in full_content for kw in ['error calculando', 'problema técnico', 'fallo herramienta']):
+        return 'tool_failure'
+    
+    if any(kw in full_content for kw in ['faltan parámetros', 'inválido', 'debe ser mayor']):
+        return 'validation'
+    
+    if any(kw in full_content for kw in ['no es mi especialidad', 'no puedo hacer', 'devuelvo al supervisor']):
+        return 'capability'
+    
+    return 'unknown'
 
 
-# --- Nodo Supervisor (con Circuit Breaker) ---
+def should_open_circuit(error_types: dict, error_count: int) -> bool:
+    """
+    Determina si el circuit breaker debe activarse.
+    
+    Args:
+        error_types: Diccionario con contadores por tipo de error
+        error_count: Contador total de errores
+    
+    Returns:
+        True si debe activarse el circuit breaker
+    """
+    # Regla 1: Muchos fallos de herramientas (probablemente infraestructura)
+    if error_types.get('tool_failure', 0) >= 2:
+        logger.warning("🚨 Circuit breaker: Múltiples fallos de herramientas")
+        return True
+    
+    # Regla 2: Muchos errores de validación (usuario no da info correcta)
+    if error_types.get('validation', 0) >= 3:
+        logger.warning("🚨 Circuit breaker: Múltiples errores de validación")
+        return True
+    
+    # Regla 3: Total de errores excede límite
+    if error_count >= CIRCUIT_BREAKER_MAX_RETRIES:
+        logger.warning("🚨 Circuit breaker: Límite total de errores alcanzado")
+        return True
+    
+    return False
+
+
+# ========================================
+# NODO SUPERVISOR (CON CIRCUIT BREAKER INTELIGENTE)
+# ========================================
 
 def supervisor_node(state: AgentState) -> dict:
-    """Nodo del supervisor que decide el siguiente paso, con circuit breaker."""
-    print("\n--- SUPERVISOR ---")
+    """
+    Nodo del supervisor que decide el siguiente paso.
+    Implementa circuit breaker inteligente con tracking de tipos de error.
+    """
+    logger.info("--- SUPERVISOR ---")
     
-    # Lógica del Circuit Breaker
+    # Extraer estado actual
     error_count = state.get('error_count', 0)
-    possible_error_detected = False
+    error_types = state.get('error_types', {})
+    circuit_open = state.get('circuit_open', False)
+    messages = state['messages']
     
-    # Revisar si hay mensajes y el último es del asistente
-    if state['messages'] and isinstance(state['messages'][-1], AIMessage):
-        last_message = state['messages'][-1]
-        
-        # Revisar si es una respuesta final (no tool call) indicando fallo
-        if not getattr(last_message, 'tool_calls', []):
-            full_content = ""
-            if isinstance(last_message.content, str):
-                full_content = last_message.content.lower()
-            elif isinstance(last_message.content, list):
-                for part in last_message.content:
-                    if isinstance(part, dict) and 'text' in part:
-                        full_content += part['text'].lower()
-                    elif isinstance(part, str):
-                        full_content += part.lower()
-            
-            # Palabras clave que indican fallo
-            error_keywords = ["problema técnico", "no puedo calcular", "error", "no es mi especialidad", "faltan parámetros"]
-            if any(keyword in full_content for keyword in error_keywords):
-                error_count += 1
-                possible_error_detected = True
-                print(f"⚠️ Detectada falla/incapacidad de agente. Conteo errores: {error_count}/{CIRCUIT_BREAKER_MAX_RETRIES}")
-    
-    # Comprobar límite de reintentos
-    if possible_error_detected and error_count >= CIRCUIT_BREAKER_MAX_RETRIES:
-        print(f"🚨 Límite de reintentos alcanzado ({CIRCUIT_BREAKER_MAX_RETRIES}). Forzando FINISH.")
-        error_msg = f"Error: No se pudo completar la tarea después de {CIRCUIT_BREAKER_MAX_RETRIES} intentos fallidos del agente. El proceso se ha detenido."
+    # Si el circuito está abierto, no continuar
+    if circuit_open:
+        logger.error("⛔ Circuit breaker ACTIVADO - finalizando ejecución")
+        error_msg = (
+            "🚨 **Sistema detenido por seguridad**\n\n"
+            "El agente ha encontrado múltiples errores y se ha detenido para evitar bucles infinitos.\n\n"
+            f"**Errores detectados:** {error_count}\n"
+            f"**Tipos de error:** {error_types}\n\n"
+            "**Acciones sugeridas:**\n"
+            "1. Verifica que tu consulta esté completa y bien formulada\n"
+            "2. Si es un cálculo, asegúrate de proporcionar todos los parámetros\n"
+            "3. Intenta reformular tu pregunta\n"
+            "4. Si el problema persiste, contacta al administrador"
+        )
         return {
             "messages": [AIMessage(content=error_msg)],
             "next_node": "FINISH",
-            "error_count": error_count
+            "circuit_open": True
         }
     
-    # --- Enrutamiento Normal ---
-    supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + state['messages']
+    # ========================================
+    # ANÁLISIS DEL ÚLTIMO MENSAJE
+    # ========================================
+    
+    possible_error_detected = False
+    error_type = None
+    
+    if messages and isinstance(messages[-1], AIMessage):
+        last_message = messages[-1]
+        
+        # Solo revisar mensajes finales (no tool calls intermedios)
+        if not getattr(last_message, 'tool_calls', []):
+            error_type = detect_error_type(last_message)
+            
+            # Si detectamos un error conocido
+            if error_type in ['tool_failure', 'validation', 'capability']:
+                possible_error_detected = True
+                error_count += 1
+                error_types[error_type] = error_types.get(error_type, 0) + 1
+                
+                logger.warning(
+                    f"⚠️ Error detectado - Tipo: {error_type} | "
+                    f"Total: {error_count} | Por tipo: {error_types}"
+                )
+    
+    # ========================================
+    # VERIFICAR SI ABRIR CIRCUIT BREAKER
+    # ========================================
+    
+    if possible_error_detected and should_open_circuit(error_types, error_count):
+        circuit_open = True
+        
+        # Mensaje personalizado según tipo de error dominante
+        max_error_type = max(error_types, key=error_types.get) if error_types else 'unknown'
+        
+        if max_error_type == 'validation':
+            error_msg = (
+                "⚠️ **Información Incompleta**\n\n"
+                "He intentado procesar tu solicitud varias veces, pero faltan parámetros necesarios.\n\n"
+                "**Por favor, proporciona:**\n"
+                "- Todos los valores numéricos requeridos\n"
+                "- Especifica claramente qué quieres calcular\n"
+                "- Revisa que los valores estén en el formato correcto\n\n"
+                "Ejemplo válido: *'Calcula VAN: inversión 100k, flujos [30k, 40k, 50k], tasa 10%'*"
+            )
+        elif max_error_type == 'tool_failure':
+            error_msg = (
+                "🔧 **Error de Sistema**\n\n"
+                "Las herramientas de cálculo están experimentando problemas técnicos.\n\n"
+                "**Acciones sugeridas:**\n"
+                "1. Intenta de nuevo en unos momentos\n"
+                "2. Verifica tu conexión a internet\n"
+                "3. Si el problema persiste, contacta al administrador\n\n"
+                f"Errores registrados: {error_types}"
+            )
+        else:
+            error_msg = (
+                "❌ **Procesamiento Detenido**\n\n"
+                f"No pude completar tu solicitud después de {error_count} intentos.\n\n"
+                "**Intenta:**\n"
+                "1. Reformular tu pregunta de manera más específica\n"
+                "2. Dividir tu consulta en pasos más simples\n"
+                "3. Usar el comando 'Ayuda' para ver ejemplos\n\n"
+                f"Tipos de error: {error_types}"
+            )
+        
+        return {
+            "messages": [AIMessage(content=error_msg)],
+            "next_node": "FINISH",
+            "error_count": error_count,
+            "error_types": error_types,
+            "circuit_open": True
+        }
+    
+    # ========================================
+    # ENRUTAMIENTO NORMAL
+    # ========================================
+    
+    supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
     
     next_node_decision = "FINISH"  # Default
     try:
@@ -79,57 +234,75 @@ def supervisor_node(state: AgentState) -> dict:
         if hasattr(route, 'next_agent'):
             next_node_decision = route.next_agent
         else:
-            print("⚠️ Advertencia: Respuesta del supervisor LLM no tuvo 'next_agent'. Usando FINISH.")
+            logger.warning("⚠️ Respuesta del supervisor sin 'next_agent'. Usando FINISH.")
             next_node_decision = "FINISH"
         
-        print(f"🧭 Supervisor decide ruta: {next_node_decision}")
+        logger.info(f"🧭 Supervisor decide: {next_node_decision}")
         
     except Exception as e:
-        print(f"❌ ERROR en LLM Supervisor al invocar: {type(e).__name__} - {e}")
-        st.warning(f"Advertencia: El supervisor LLM falló ({e}). Finalizando por seguridad.")
+        logger.error(f"❌ Error en supervisor LLM: {e}", exc_info=True)
+        st.warning(f"Advertencia: El supervisor falló ({e}). Finalizando.")
         next_node_decision = "FINISH"
     
-    # --- Resetear Contador de Errores ---
+    # ========================================
+    # RESETEAR CONTADOR SI TIENE ÉXITO
+    # ========================================
+    
     previous_node = state.get('next_node', None)
-    if not possible_error_detected and (next_node_decision == "FINISH" or next_node_decision != previous_node):
-        if error_count > 0:
-            print("🔄 Reseteando contador de errores a 0.")
-        error_count = 0
+    
+    # Si no hubo error y cambió de nodo o finalizó, resetear contadores
+    if not possible_error_detected:
+        if next_node_decision == "FINISH" or next_node_decision != previous_node:
+            if error_count > 0:
+                logger.info("🔄 Tarea exitosa - reseteando contadores de error")
+                error_count = 0
+                error_types = {}
     
     return {
         "next_node": next_node_decision,
-        "error_count": error_count
+        "error_count": error_count,
+        "error_types": error_types,
+        "circuit_open": circuit_open,
+        "last_error_time": datetime.now().timestamp() if possible_error_detected else 0
     }
 
 
-# --- Construcción del Grafo ---
+# ========================================
+# CONSTRUCCIÓN DEL GRAFO
+# ========================================
 
 def build_graph():
     """Construye y compila el grafo LangGraph."""
+    logger.info("🏗️ Construyendo grafo de agentes...")
+    
     workflow = StateGraph(AgentState)
     
     # Añadir nodo supervisor
     workflow.add_node("Supervisor", supervisor_node)
+    logger.debug("   Nodo 'Supervisor' agregado")
     
-    # Añadir nodos de agentes desde el diccionario importado
+    # Añadir nodos de agentes
     for name, node in agent_nodes.items():
         workflow.add_node(name, node)
+        logger.debug(f"   Nodo '{name}' agregado")
     
-    # Establecer el punto de entrada
+    # Establecer punto de entrada
     workflow.set_entry_point("Supervisor")
     
-    # Definir la función de enrutamiento condicional
+    # Función de enrutamiento condicional
     def conditional_router(state: AgentState) -> str:
-        """Función de enrutamiento basada en la decisión del supervisor."""
+        """Enruta basado en la decisión del supervisor."""
         node_to_go = state.get("next_node")
         valid_nodes = list(agent_nodes.keys()) + ["FINISH"]
+        
         if node_to_go not in valid_nodes:
-            print(f"⚠️ Alerta Ruteo: Destino inválido '{node_to_go}'. Forzando FINISH.")
+            logger.warning(f"⚠️ Destino inválido '{node_to_go}'. Forzando FINISH.")
             return "FINISH"
-        print(f"🚦 Enrutando a: {node_to_go}")
+        
+        logger.debug(f"🚦 Enrutando a: {node_to_go}")
         return node_to_go
     
-    # Crear el mapeo para las aristas condicionales
+    # Crear mapeo para aristas condicionales
     conditional_map = {name: name for name in agent_nodes}
     conditional_map["FINISH"] = END
     
@@ -139,32 +312,38 @@ def build_graph():
         conditional_map
     )
     
-    # Añadir aristas de retorno desde cada agente al supervisor
+    # Aristas de retorno: agentes → supervisor
     for name in agent_nodes:
         if name in ["Agente_Ayuda", "Agente_RAG"]:
-            # Rutas especiales: Ayuda y RAG van directo al final
+            # Ayuda y RAG van directo al final
             workflow.add_edge(name, END)
+            logger.debug(f"   {name} → END")
         else:
-            # Los agentes normales vuelven al supervisor
+            # Agentes normales vuelven al supervisor
             workflow.add_edge(name, "Supervisor")
+            logger.debug(f"   {name} → Supervisor")
     
-    # Compilar el grafo con un checkpointer de memoria
+    # Compilar con checkpointer
     memory = MemorySaver()
     try:
         compiled_graph = workflow.compile(checkpointer=memory)
-        print("✅ Grafo compilado correctamente con MemorySaver.")
+        logger.info("✅ Grafo compilado correctamente con MemorySaver")
         return compiled_graph
     except Exception as e:
-        print(f"❌ ERROR CRÍTICO al compilar el grafo: {e}")
+        logger.error(f"❌ Error crítico al compilar grafo: {e}", exc_info=True)
         raise e
 
 
-# Crear la instancia global del grafo compilado
+# ========================================
+# INSTANCIA GLOBAL
+# ========================================
+
 try:
     compiled_graph = build_graph()
+    logger.info("✅ Grafo global inicializado")
 except Exception as build_error:
+    logger.error(f"❌ Error fatal en build_graph: {build_error}", exc_info=True)
     st.error(f"Error fatal al construir el agente gráfico: {build_error}")
-    print(f"❌ Abortando: Falla en build_graph(): {build_error}")
     st.stop()
 
-print("✅ Módulo agent_graph cargado (LangChain 1.0).")
+logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker Inteligente)")

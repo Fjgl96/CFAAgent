@@ -1,7 +1,7 @@
 # agents/financial_agents.py
 """
 Agentes especializados financieros.
-Actualizado para LangChain 1.0+ con RAG integrado.
+Actualizado para LangChain 1.0+ con RAG integrado y logging estructurado.
 """
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -24,23 +24,37 @@ from tools.help_tools import obtener_ejemplos_de_uso
 # Importar RAG
 from rag.financial_rag_elasticsearch import buscar_documentacion_financiera
 
+# Importar logger
+try:
+    from utils.logger import get_logger
+    logger = get_logger('agents')
+except ImportError:
+    import logging
+    logger = logging.getLogger('agents')
+
 llm = get_llm()
 
-# --- Creación de Agentes Especialistas ---
+# ========================================
+# PLACEHOLDER DE MENSAJES
+# ========================================
 
 messages_placeholder = MessagesPlaceholder(variable_name="messages")
 
+# ========================================
+# NODOS ESPECIALES
+# ========================================
 
 def nodo_ayuda_directo(state: dict) -> dict:
     """Nodo simple que llama a la herramienta de ayuda directamente."""
-    print("\n--- NODO AYUDA (DIRECTO) ---")
+    logger.info("📖 Nodo Ayuda invocado")
     try:
         guia_de_preguntas = obtener_ejemplos_de_uso.invoke({})
+        logger.debug("✅ Guía de ayuda generada")
         return {
             "messages": [AIMessage(content=guia_de_preguntas)]
         }
     except Exception as e:
-        print(f"❌ ERROR en nodo_ayuda_directo: {e}")
+        logger.error(f"❌ Error en nodo_ayuda: {e}", exc_info=True)
         return {
             "messages": [AIMessage(content=f"Error al obtener la guía de ayuda: {e}")]
         }
@@ -48,15 +62,14 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 def nodo_rag(state: dict) -> dict:
     """Nodo que consulta la documentación CFA usando RAG."""
-    print("\n--- AGENTE RAG ---")
+    logger.info("📚 Agente RAG invocado")
     
     # Extraer última pregunta del usuario
     messages = state.get("messages", [])
     if not messages:
+        logger.error("❌ Estado sin mensajes en nodo RAG")
         return {
-            "messages": [AIMessage(
-                content="Error: No hay mensajes en el estado."
-            )]
+            "messages": [AIMessage(content="Error: No hay mensajes en el estado.")]
         }
     
     last_message = messages[-1]
@@ -67,19 +80,19 @@ def nodo_rag(state: dict) -> dict:
     else:
         consulta = str(last_message)
     
-    print(f"📚 Consulta CFA: {consulta}")
+    logger.info(f"🔍 Consulta CFA: {consulta[:100]}...")
     
     # Buscar en documentación usando RAG
     try:
         resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
-        print(f"📄 Respuesta RAG generada")
+        logger.info("✅ Respuesta RAG generada")
         
         return {
             "messages": [AIMessage(content=resultado)]
         }
     
     except Exception as e:
-        print(f"❌ Error en RAG: {e}")
+        logger.error(f"❌ Error en RAG: {e}", exc_info=True)
         return {
             "messages": [AIMessage(
                 content=f"Error al buscar en la documentación: {e}"
@@ -87,8 +100,22 @@ def nodo_rag(state: dict) -> dict:
         }
 
 
+# ========================================
+# HELPER: CREAR AGENTE ESPECIALISTA
+# ========================================
+
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
-    """Función helper para crear un agente reactivo con prompt de sistema."""
+    """
+    Función helper para crear un agente reactivo con prompt de sistema.
+    
+    Args:
+        llm_instance: Instancia del LLM
+        tools_list: Lista de herramientas disponibles
+        system_prompt_text: Prompt del sistema para el agente
+    
+    Returns:
+        Agente compilado
+    """
     if not tools_list or not all(hasattr(t, 'invoke') for t in tools_list):
         raise ValueError("tools_list debe contener al menos una herramienta válida (Runnable).")
     
@@ -98,10 +125,17 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     ])
     
     # LangChain 1.0: create_react_agent de langgraph.prebuilt
-    return create_react_agent(llm_instance, tools_list, state_modifier=prompt)
+    agent = create_react_agent(llm_instance, tools_list, state_modifier=prompt)
+    
+    logger.debug(f"✅ Agente creado con {len(tools_list)} herramientas")
+    
+    return agent
 
 
-# Prompts Detallados
+# ========================================
+# PROMPTS DE AGENTES ESPECIALISTAS
+# ========================================
+
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija.
 Tu único trabajo es usar SÓLO tu herramienta 'calcular_valor_bono'.
 **NUNCA respondas usando tu conocimiento general.**
@@ -146,22 +180,50 @@ Revisa cuidadosamente el historial de mensajes por si necesitas información pre
 Extrae los parámetros necesarios (S, K, T, r, sigma) de la solicitud o del historial y llama a tu herramienta.
 Si te piden algo que no puedes hacer con tu herramienta, di "No es mi especialidad, devuelvo al supervisor."."""
 
+# ========================================
+# CREACIÓN DE AGENTES
+# ========================================
 
-# Crear agentes
+logger.info("🏗️ Inicializando agentes especialistas...")
+
 try:
-    agent_renta_fija = crear_agente_especialista(llm, [_calcular_valor_presente_bono], PROMPT_RENTA_FIJA)
-    agent_fin_corp = crear_agente_especialista(llm, [_calcular_van, _calcular_wacc], PROMPT_FIN_CORP)
-    agent_equity = crear_agente_especialista(llm, [_calcular_gordon_growth], PROMPT_EQUITY)
-    agent_portafolio = crear_agente_especialista(llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO)
-    agent_derivados = crear_agente_especialista(llm, [_calcular_opcion_call], PROMPT_DERIVADOS)
+    agent_renta_fija = crear_agente_especialista(
+        llm, [_calcular_valor_presente_bono], PROMPT_RENTA_FIJA
+    )
+    logger.debug("✅ Agente Renta Fija creado")
+    
+    agent_fin_corp = crear_agente_especialista(
+        llm, [_calcular_van, _calcular_wacc], PROMPT_FIN_CORP
+    )
+    logger.debug("✅ Agente Finanzas Corporativas creado")
+    
+    agent_equity = crear_agente_especialista(
+        llm, [_calcular_gordon_growth], PROMPT_EQUITY
+    )
+    logger.debug("✅ Agente Equity creado")
+    
+    agent_portafolio = crear_agente_especialista(
+        llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO
+    )
+    logger.debug("✅ Agente Portafolio creado")
+    
+    agent_derivados = crear_agente_especialista(
+        llm, [_calcular_opcion_call], PROMPT_DERIVADOS
+    )
+    logger.debug("✅ Agente Derivados creado")
+    
+    logger.info("✅ Todos los agentes creados exitosamente")
+
 except Exception as e:
-    print(f"❌ ERROR CRÍTICO al crear agentes especialistas: {e}")
+    logger.error(f"❌ ERROR CRÍTICO al crear agentes: {e}", exc_info=True)
     import streamlit as st
     st.error(f"Error inicializando los agentes: {e}")
     st.stop()
 
+# ========================================
+# DICCIONARIO DE NODOS
+# ========================================
 
-# Diccionario de nodos
 agent_nodes = {
     "Agente_Renta_Fija": agent_renta_fija,
     "Agente_Finanzas_Corp": agent_fin_corp,
@@ -172,7 +234,11 @@ agent_nodes = {
     "Agente_RAG": nodo_rag,
 }
 
-# --- Supervisor ---
+logger.info(f"📋 {len(agent_nodes)} agentes registrados")
+
+# ========================================
+# SUPERVISOR
+# ========================================
 
 class RouterSchema(BaseModel):
     """Elige el siguiente agente a llamar o finaliza."""
@@ -180,18 +246,20 @@ class RouterSchema(BaseModel):
         description="El nombre del agente especialista para la tarea. Elige 'FINISH' si la solicitud fue completamente respondida."
     )
 
-
 # Configurar el LLM supervisor
 try:
     supervisor_llm = llm.with_structured_output(RouterSchema)
+    logger.info("✅ Supervisor LLM configurado")
 except Exception as e:
-    print(f"❌ ERROR configurando supervisor LLM con structured_output: {e}")
+    logger.error(f"❌ ERROR configurando supervisor: {e}", exc_info=True)
     import streamlit as st
     st.error(f"Error configurando el supervisor: {e}")
     st.stop()
 
+# ========================================
+# PROMPT DEL SUPERVISOR
+# ========================================
 
-# Prompt del supervisor
 supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el último mensaje del usuario Y el historial de la conversación para decidir qué especialista debe actuar A CONTINUACIÓN. No respondas tú mismo. SOLO elige el siguiente paso.
 
 Especialistas y sus ÚNICAS herramientas:
@@ -231,4 +299,4 @@ Elige el agente especialista apropiado según la herramienta necesaria.
 SOLO devuelve el nombre del agente o "FINISH".
 """
 
-print("✅ Módulo financial_agents cargado (LangChain 1.0 + RAG integrado).")
+logger.info("✅ Módulo financial_agents cargado (LangChain 1.0 + RAG + Logging)")
