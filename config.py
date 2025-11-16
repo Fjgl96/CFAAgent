@@ -1,13 +1,11 @@
 # config.py
 """
-Configuración consolidada del sistema.
-Incluye: Anthropic, LangSmith, Elasticsearch, Paths, Logging.
-Actualizado para LangChain 1.0+ con validación robusta.
+Configuración general del sistema + LangSmith + OpenAI.
+Actualizado para LangChain 1.0+
 """
 
 import os
 from pathlib import Path
-from typing import Optional
 import streamlit as st
 from langchain_anthropic import ChatAnthropic
 
@@ -24,79 +22,72 @@ SHARED_DIR.mkdir(parents=True, exist_ok=True)
 # Subdirectorios
 DOCS_DIR = SHARED_DIR / "docs"
 LOGS_DIR = SHARED_DIR / "logs"
-FAISS_DIR = SHARED_DIR / "faiss_index"
-
-for directory in [DOCS_DIR, LOGS_DIR, FAISS_DIR]:
-    directory.mkdir(exist_ok=True)
+DOCS_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
 
 # ========================================
-# HELPER: CARGAR API KEYS SEGURAS
+# API KEYS
 # ========================================
 
-def load_api_key(secret_name: str, env_var_name: str, required: bool = True) -> Optional[str]:
-    """
-    Carga una API key desde Streamlit secrets o variables de entorno.
-    
-    Args:
-        secret_name: Nombre en Streamlit secrets
-        env_var_name: Nombre en variables de entorno
-        required: Si es True, detiene la app si no encuentra la key
-    
-    Returns:
-        API key o None si es opcional y no existe
-    """
+_ANTHROPIC_API_KEY = None
+_LANGSMITH_API_KEY = None
+_OPENAI_API_KEY = None
+
+def load_api_key(secret_name: str, env_var_name: str, required: bool = True) -> str:
+    """Carga una API key desde Streamlit secrets o variables de entorno."""
     loaded_key = None
     source = "unknown"
 
-    # Intenta Streamlit Secrets primero
     try:
+        # Intenta Streamlit Secrets primero
         loaded_key = st.secrets[secret_name]
         source = "Streamlit secrets"
+        print(f"🔑 Cargada {secret_name} desde {source}.")
         return loaded_key
     except (FileNotFoundError, KeyError, AttributeError):
-        pass
-    
-    # Intenta variables de entorno
-    try:
-        from dotenv import load_dotenv
-        dotenv_path = BASE_DIR / '.env'
-        if dotenv_path.exists():
-            load_dotenv(dotenv_path=dotenv_path)
+        # Intenta variables de entorno
+        try:
+            from dotenv import load_dotenv
+            dotenv_path = BASE_DIR / '.env'
+            if dotenv_path.exists():
+                load_dotenv(dotenv_path=dotenv_path)
+                print("📄 Archivo .env cargado.")
+            else:
+                load_dotenv()
+        except ImportError:
+            print("⚠️ python-dotenv no instalado.")
+        
+        loaded_key = os.getenv(env_var_name)
+        if loaded_key:
+            source = "variables de entorno"
+            print(f"🔑 Cargada {env_var_name} desde {source}.")
+            return loaded_key
         else:
-            load_dotenv()
-    except ImportError:
-        pass
-    
-    loaded_key = os.getenv(env_var_name)
-    if loaded_key:
-        source = "variables de entorno"
-        return loaded_key
-    
-    # No se encontró la key
-    if required:
-        error_message = (
-            f"❌ {env_var_name} no encontrada.\n\n"
-            f"**Opciones de configuración:**\n"
-            f"1. Crear archivo `.env` con: `{env_var_name}=tu_valor`\n"
-            f"2. Configurar en Streamlit Cloud secrets\n"
-            f"3. Exportar variable de entorno: `export {env_var_name}=tu_valor`"
-        )
-        st.error(error_message)
-        st.stop()
-    
-    return None
+            if required:
+                error_message = f"{env_var_name} no encontrada. Configúrala en secrets o .env"
+                st.error(error_message)
+                print(f"❌ {error_message}")
+                st.stop()
+            else:
+                print(f"⚠️ {env_var_name} no encontrada (opcional).")
+                return None
+    except Exception as e:
+        st.error(f"Error inesperado al cargar {secret_name}: {e}")
+        print(f"❌ Error al cargar {secret_name}: {e}")
+        if required:
+            st.stop()
+        return None
 
-# ========================================
-# API KEYS - ANTHROPIC & LANGSMITH
-# ========================================
-
+# Cargar API keys
 ANTHROPIC_API_KEY = load_api_key("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", required=True)
 LANGSMITH_API_KEY = load_api_key("LANGSMITH_API_KEY", "LANGSMITH_API_KEY", required=False)
+OPENAI_API_KEY = load_api_key("OPENAI_API_KEY", "OPENAI_API_KEY", required=True)  # ⚡ NUEVO
 
 # ========================================
 # LANGSMITH CONFIGURATION
 # ========================================
 
+# Habilitar LangSmith si hay API key
 LANGSMITH_ENABLED = LANGSMITH_API_KEY is not None
 
 if LANGSMITH_ENABLED:
@@ -104,100 +95,23 @@ if LANGSMITH_ENABLED:
     os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "financial-agent-prod")
     os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+    print("✅ LangSmith habilitado")
+    print(f"   Proyecto: {os.environ['LANGCHAIN_PROJECT']}")
 else:
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    print("⚠️ LangSmith deshabilitado (no hay API key)")
 
-# ========================================
-# ELASTICSEARCH CONFIGURATION
-# ========================================
-
-# Cargar credenciales (SIN defaults para seguridad)
-ES_HOST = load_api_key("ES_HOST", "ES_HOST", required=True)
-ES_PORT = int(os.getenv("ES_PORT", "9200"))
-ES_USERNAME = load_api_key("ES_USERNAME", "ES_USERNAME", required=True)
-ES_PASSWORD = load_api_key("ES_PASSWORD", "ES_PASSWORD", required=True)
-ES_SCHEME = os.getenv("ES_SCHEME", "httpss") # (Puse "httpss" a propósito, para que falle si no lo pones en .env)
-
-# Corrige el valor por defecto de SCHEME
-if ES_SCHEME == "httpss":
-    ES_SCHEME = "https" # El valor por defecto debe ser "https"
-# URL completa
-ES_URL = f"{ES_SCHEME}://{ES_HOST}:{ES_PORT}"
-
-# Configuración del índice
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "cfa_documents")
-
-# Configuración de embeddings
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-EMBEDDING_DIMENSIONS = 768
-# Configuración de chunking
-CHUNK_SIZE = 1200
-CHUNK_OVERLAP = 250
-
-# ========================================
-# FUNCIÓN: CLIENTE ELASTICSEARCH
-# ========================================
-
-def get_elasticsearch_client():
-    """
-    Crea y retorna un cliente de Elasticsearch configurado usando URL y Password.
-    """
-    from elasticsearch import Elasticsearch
-    
-    try:
-        # --- ESTA ES LA CONFIGURACIÓN QUE FUNCIONÓ EN TU NOTEBOOK ---
-        es_client = Elasticsearch(
-            [ES_URL],
-            basic_auth=(ES_USERNAME, ES_PASSWORD),
-            
-            # Como funcionó en tu notebook, lo ponemos en True
-            verify_certs=True, 
-            
-            request_timeout=30,
-            max_retries=3,
-            retry_on_timeout=True
-        )
-        
-        if es_client.ping():
-            # Devuelve el cliente si el ping es exitoso
-            return es_client
-        else:
-            print("❌ No se pudo conectar a Elasticsearch (ping falló)")
-            return None
-    
-    except Exception as e:
-        print(f"❌ Error conectando a Elasticsearch (URL): {e}")
-        return None
-
-# ========================================
-# FUNCIÓN: CONFIG ELASTICSEARCH PARA LANGCHAIN
-# ========================================
-
-def get_es_config() -> dict:
-    """Retorna configuración para ElasticsearchStore de LangChain."""
-    # ¡Asegúrate de que esto devuelva las claves correctas!
-    return {
-        "es_url": ES_URL,
-        "es_user": ES_USERNAME,
-        "es_password": ES_PASSWORD,
-        "index_name": ES_INDEX_NAME
-    }
 # ========================================
 # LLM CONFIGURATION
 # ========================================
 
-LLM_MODEL = "claude-3-5-haiku-20241022"
+LLM_MODEL = "claude-3-5-haiku-20241022"  # Modelo actualizado
 LLM_TEMPERATURE = 0.1
 
 _llm_instance = None
 
 def get_llm():
-    """
-    Retorna una instancia singleton configurada del LLM.
-    
-    Returns:
-        ChatAnthropic instance
-    """
+    """Retorna una instancia singleton configurada del LLM."""
     global _llm_instance
     if _llm_instance is None:
         if not ANTHROPIC_API_KEY:
@@ -209,31 +123,33 @@ def get_llm():
                 temperature=LLM_TEMPERATURE,
                 api_key=ANTHROPIC_API_KEY
             )
+            print(f"🧠 Instancia LLM ({LLM_MODEL}, temp={LLM_TEMPERATURE}) creada.")
         except Exception as e:
             st.error(f"Error al crear la instancia del LLM: {e}")
+            print(f"❌ Error al crear LLM: {e}")
             st.stop()
     return _llm_instance
 
 # ========================================
-# CIRCUIT BREAKER CONFIGURATION
+# OTRAS CONFIGURACIONES
 # ========================================
 
 CIRCUIT_BREAKER_MAX_RETRIES = 2
-CIRCUIT_BREAKER_COOLDOWN = 5  # segundos
-
+CIRCUIT_BREAKER_COOLDOWN = 10
 # ========================================
-# ADMIN CONFIGURATION
+# SISTEMA DE ROLES (OPCIONAL)
 # ========================================
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # CAMBIAR EN PRODUCCIÓN
 
 def is_admin(password: str) -> bool:
     """Verifica si el password es correcto para admin."""
     return password == ADMIN_PASSWORD
 
 # ========================================
-# HEALTH CHECK
+# LOGGING
 # ========================================
+
 
 def check_system_health() -> dict:
     """
@@ -272,15 +188,9 @@ def check_system_health() -> dict:
     
     return health
 
-# ========================================
-# LOGGING HELPER
-# ========================================
 
 def log_event(event_type: str, data: dict) -> bool:
-    """
-    Registra eventos en el log correspondiente.
-    DEPRECATED: Usar utils.logger en su lugar.
-    """
+    """Registra eventos en el log correspondiente."""
     import json
     from datetime import datetime
     
@@ -308,12 +218,4 @@ def log_event(event_type: str, data: dict) -> bool:
         print(f"❌ Error logging event: {e}")
         return False
 
-# ========================================
-# INICIALIZACIÓN
-# ========================================
-
-print("✅ Configuración consolidada cargada")
-print(f"   LLM: {LLM_MODEL}")
-print(f"   LangSmith: {'Habilitado' if LANGSMITH_ENABLED else 'Deshabilitado'}")
-print(f"   Elasticsearch: {ES_URL}")
-print(f"   Índice ES: {ES_INDEX_NAME}")
+print("✅ Módulo config cargado (LangChain 1.0 + LangSmith + OpenAI).")

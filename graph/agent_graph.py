@@ -314,10 +314,14 @@ def build_graph():
     
     # Aristas de retorno: agentes → supervisor
     for name in agent_nodes:
-        if name in ["Agente_Ayuda", "Agente_RAG"]:
+        if name in ["Agente_Ayuda"]:
             # Ayuda y RAG van directo al final
             workflow.add_edge(name, END)
             logger.debug(f"   {name} → END")
+        elif name == "Agente_RAG":
+            # 2. RAG va DIRECTO a SÍNTESIS (¡Tu idea!)
+            workflow.add_edge(name, "Agente_Sintesis_RAG")
+            logger.debug(f"   {name} → Agente_Sintesis_RAG (Directo)")
         else:
             # Agentes normales vuelven al supervisor
             workflow.add_edge(name, "Supervisor")

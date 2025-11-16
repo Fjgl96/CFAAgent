@@ -96,6 +96,31 @@ def nodo_rag(state: dict) -> dict:
 # ========================================
 # HELPER: CREAR AGENTE ESPECIALISTA (LANGGRAPH 1.0+)
 # ========================================
+def nodo_sintesis_rag(state: dict) -> dict:
+    """
+    Nodo que toma el contexto (del historial) y genera una síntesis.
+    """
+    logger.info("🧠 Nodo Síntesis RAG invocado")
+    messages = state.get("messages", [])
+    if not messages:
+        logger.error("❌ Estado sin mensajes en nodo Síntesis")
+        return {"messages": [AIMessage(content="Error: No hay mensajes en el estado.")]}
+    
+    try:
+        # 1. Bindea el LLM con el prompt de síntesis
+        llm_sintesis = llm.bind(system=PROMPT_SINTESIS_RAG)
+        
+        # 2. Pasa el historial de mensajes (que incluye la pregunta Y el contexto del RAG)
+        #    al LLM bindeado con el prompt de síntesis.
+        respuesta_sintetizada = llm_sintesis.invoke(messages)
+        
+        logger.info("✅ Respuesta RAG sintetizada")
+        return {
+            "messages": [respuesta_sintetizada] # La salida de invoke es una AIMessage
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en nodo_sintesis_rag: {e}", exc_info=True)
+        return {"messages": [AIMessage(content=f"Error al sintetizar la respuesta: {e}")]}
 
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     """
@@ -133,6 +158,29 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 # ========================================
 # PROMPTS DE AGENTES ESPECIALISTAS
 # ========================================
+
+PROMPT_SINTESIS_RAG = """
+Eres un asistente financiero experto y un tutor de nivel CFA. Tu tono es profesional, servicial y analítico.
+
+TAREA:
+Has recibido una pregunta de un usuario y el contexto relevante de los libros CFA.
+Tu trabajo es SINTETIZAR el contexto para generar una respuesta clara y concisa.
+
+REGLAS ABSOLUTAS:
+1. NO copies y pegues el contexto. Debes leerlo y generar una respuesta con tus propias palabras (las del rol de experto).
+2. Basa tu respuesta ESTRICTAMENTE en el contexto proporcionado. No inventes información.
+3. Si el contexto no es suficiente, indica que la información no se encontró en los documentos.
+4. Al final de tu respuesta, DEBES citar tus fuentes. El contexto incluirá metadatos (ej. "source", "page_number").
+
+EJEMPLO DE RESPUESTA:
+[Tu párrafo de SÍNTESIS aquí...]
+
+---
+Fuentes:
+- CFA Level 1 2025 - Vol 2, Página 42
+- CFA Level 1 2025 - Vol 3, Página 108
+""" 
+
 
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija.
 Tu único trabajo es usar SÓLO tu herramienta 'calcular_valor_bono'.
@@ -204,7 +252,6 @@ try:
         llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO
     )
     logger.debug("✅ Agente Portafolio creado")
-    
     agent_derivados = crear_agente_especialista(
         llm, [_calcular_opcion_call], PROMPT_DERIVADOS
     )
@@ -223,13 +270,14 @@ except Exception as e:
 # ========================================
 
 agent_nodes = {
-    "Agente_Renta_Fija": agent_renta_fija,
+"Agente_Renta_Fija": agent_renta_fija,
     "Agente_Finanzas_Corp": agent_fin_corp,
     "Agente_Equity": agent_equity,
     "Agente_Portafolio": agent_portafolio,
     "Agente_Derivados": agent_derivados,
     "Agente_Ayuda": nodo_ayuda_directo,
     "Agente_RAG": nodo_rag,
+    "Agente_Sintesis_RAG": nodo_sintesis_rag
 }
 
 logger.info(f"📋 {len(agent_nodes)} agentes registrados")
@@ -258,42 +306,43 @@ except Exception as e:
 # PROMPT DEL SUPERVISOR
 # ========================================
 
-supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el último mensaje del usuario Y el historial de la conversación para decidir qué especialista debe actuar A CONTINUACIÓN. No respondas tú mismo. SOLO elige el siguiente paso.
+# En: agents/financial_agents.py
 
-Especialistas y sus ÚNICAS herramientas:
+supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el historial COMPLETO de la conversación y decidir el siguiente paso.
+
+Especialistas:
 - Agente_Renta_Fija: `calcular_valor_bono`
 - Agente_Finanzas_Corp: `calcular_van`, `calcular_wacc`
 - Agente_Equity: `calcular_gordon_growth`
 - Agente_Portafolio: `calcular_capm`, `calcular_sharpe_ratio`
 - Agente_Derivados: `calcular_opcion_call`
 - Agente_Ayuda: `obtener_ejemplos_de_uso`
-- Agente_RAG: `buscar_documentacion_financiera`
+- Agente_RAG: `buscar_documentacion_financiera` (SOLO BUSCA)
+- Agente_Sintesis_RAG: Sintetiza el contexto de Agente_RAG.
 
-PROCESO DE DECISIÓN:
-**1. PRIORIDAD MÁXIMA: Revisa el último mensaje del usuario.**
+PROCESO DE DECISIÓN (SIGUE ESTAS REGLAS EN ORDEN ESTRICTO):
 
-**2. DETECCIÓN DE CONSULTAS RAG:**
-Si el usuario hace preguntas teóricas o de conceptos como:
-- "qué dice el material CFA sobre..."
-- "según el CFA..."
-- "explica el concepto de..."
-- "busca en la documentación..."
-- "qué es [concepto] según CFA..."
-→ Elige 'Agente_RAG'
+**1. REGLA DE FINALIZACIÓN (MÁXIMA PRIORIDAD):**
+¿Es el último mensaje en el historial una respuesta FINAL y SINTETIZADA de 'Agente_Sintesis_RAG' o una respuesta de un agente de cálculo (como 'Agente_Finanzas_Corp')?
+SI ES SÍ: La tarea está 100% completada. No llames a ningún otro agente.
+→ Elige 'FINISH'
 
-**3. DETECCIÓN DE CONSULTAS DE AYUDA:**
-Si el usuario usa palabras como "ayuda", "ejemplos", "qué puedes hacer", "cómo funciona":
+**2. REGLA DE AYUDA (SEGUNDA PRIORIDAD):**
+¿Es el último mensaje del usuario Y pide "ayuda", "ejemplos", o "qué puedes hacer"?
+SI ES SÍ:
 → Elige 'Agente_Ayuda'
 
-**4. PARA CÁLCULOS NUMÉRICOS:**
-Elige el agente especialista apropiado según la herramienta necesaria.
+**3. REGLA DE BÚSQUEDA RAG (TERCERA PRIORIDAD):**
+¿Es el último mensaje del usuario Y es una pregunta teórica (ej. "qué es...", "explica...", "busca en la documentación...")?
+SI ES SÍ: (y la regla 1 no se aplicó)
+→ Elige 'Agente_RAG'
 
-**5. Si el último agente completó su parte Y no quedan tareas pendientes:**
-→ Elige 'FINISH'
+**4. REGLA DE CÁLCULO (CUARTA PRIORIDAD):**
+¿Es el último mensaje del usuario Y pide un cálculo numérico (VAN, WACC, etc.)?
+SI ES SÍ: (y las reglas 1 y 2 no se aplicaron)
+→ Elige el agente especialista apropiado (ej. 'Agente_Finanzas_Corp').
 
-**6. Si el último agente indicó un error y no hay forma de continuar:**
-→ Elige 'FINISH'
-
+Si ninguna regla aplica, o si la tarea parece completada, elige 'FINISH'.
 SOLO devuelve el nombre del agente o "FINISH".
 """
 

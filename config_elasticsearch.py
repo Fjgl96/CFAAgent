@@ -1,7 +1,7 @@
 # config_elasticsearch.py
 """
 Configuración de Elasticsearch para el sistema RAG.
-Actualizado para LangChain 1.0+
+Actualizado para LangChain 1.0+ con OpenAI Embeddings
 """
 
 import os
@@ -29,9 +29,20 @@ ES_URL = f"{ES_SCHEME}://{ES_HOST}:{ES_PORT}"
 
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "cfa_documents")
 
-# Configuración de embeddings
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-EMBEDDING_DIMENSIONS = 768
+# ========================================
+# CONFIGURACIÓN DE EMBEDDINGS - OPENAI
+# ========================================
+
+# Modelos disponibles de OpenAI:
+# - text-embedding-3-small: 1536 dims, más rápido y económico (RECOMENDADO)
+# - text-embedding-3-large: 3072 dims, mejor calidad pero más caro
+# - text-embedding-ada-002: 1536 dims, modelo legacy (no recomendado)
+
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+EMBEDDING_DIMENSIONS = 3072  # 1536 para 3-small/ada-002, 3072 para 3-large
+
+# Si usas text-embedding-3-large, cambiar a:
+# EMBEDDING_DIMENSIONS = 3072
 
 # ========================================
 # CONFIGURACIÓN DE CHUNKING
@@ -85,6 +96,7 @@ def get_es_config() -> dict:
         "index_name": ES_INDEX_NAME
     }
 
+
 # ========================================
 # VERIFICAR CONEXIÓN AL IMPORTAR
 # ========================================
@@ -114,4 +126,4 @@ if __name__ == "__main__":
         print(f"  3. Usuario: {ES_USERNAME}")
         print(f"  4. Contraseña: {'*' * len(ES_PASSWORD)}")
 
-print("✅ Módulo config_elasticsearch cargado (LangChain 1.0).")
+print("✅ Módulo config_elasticsearch cargado (LangChain 1.0 + OpenAI Embeddings).")

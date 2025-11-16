@@ -2,12 +2,13 @@
 """
 generate_index.py
 Script de ADMINISTRADOR para indexar libros CFA en Elasticsearch.
-Actualizado para LangChain 1.0+
+Actualizado para LangChain 1.0+ con OpenAI Embeddings
 
 USO:
 1. Coloca tus libros CFA en: ./data/cfa_books/
-2. Ejecuta: python admin/generate_index.py
-3. Los documentos se indexan en Elasticsearch
+2. Configura OPENAI_API_KEY en .env
+3. Ejecuta: python admin/generate_index.py
+4. Los documentos se indexan en Elasticsearch
 
 SOLO el administrador ejecuta este script.
 """
@@ -28,6 +29,9 @@ from config_elasticsearch import (
     CHUNK_SIZE,
     CHUNK_OVERLAP
 )
+
+# Importar API key de OpenAI
+from config import OPENAI_API_KEY
 
 # ========================================
 # CONFIGURACIÓN
@@ -50,6 +54,17 @@ def print_header(text):
 def check_prerequisites():
     """Verifica que todo esté listo."""
     print_header("Verificando Prerrequisitos")
+    
+    # 0. Verificar OpenAI API Key
+    if not OPENAI_API_KEY:
+        print("❌ ERROR: OPENAI_API_KEY no encontrada")
+        print("   Configúrala en .env o como variable de entorno:")
+        print("   OPENAI_API_KEY=sk-...")
+        sys.exit(1)
+    else:
+        print(f"✅ OpenAI API Key configurada")
+        print(f"   Modelo: {EMBEDDING_MODEL}")
+        print(f"   Dimensiones: {EMBEDDING_DIMENSIONS}")
     
     # 1. Verificar carpeta de libros
     if not BOOKS_DIR.exists():
@@ -78,7 +93,7 @@ def check_prerequisites():
     try:
         from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader, TextLoader
         from langchain.text_splitter import RecursiveCharacterTextSplitter
-        from langchain_community.embeddings import HuggingFaceEmbeddings
+        from langchain_openai import OpenAIEmbeddings
         from langchain_elasticsearch import ElasticsearchStore
         from elasticsearch import Elasticsearch
         print("✅ Dependencias instaladas correctamente")
@@ -210,7 +225,7 @@ def create_or_recreate_index(es_client):
                 "text": {"type": "text"},
                 "vector": {
                     "type": "dense_vector",
-                    "dims": EMBEDDING_DIMENSIONS,
+                    "dims": EMBEDDING_DIMENSIONS,  # 1536 para OpenAI text-embedding-3-small
                     "index": True,
                     "similarity": "cosine"
                 },
@@ -224,26 +239,33 @@ def create_or_recreate_index(es_client):
 
 
 def index_documents_to_elasticsearch(chunks):
-    """Indexa los chunks en Elasticsearch."""
+    """Indexa los chunks en Elasticsearch usando OpenAI Embeddings."""
     print_header("Indexando Documentos en Elasticsearch")
     
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_openai import OpenAIEmbeddings
     from langchain_elasticsearch import ElasticsearchStore
     from config_elasticsearch import get_es_config
     
-    print(f"🧠 Modelo de embeddings: {EMBEDDING_MODEL}")
-    print("   (Esto puede tardar en la primera ejecución)\n")
+    print(f"🧠 Modelo de embeddings OpenAI: {EMBEDDING_MODEL}")
+    print(f"   Dimensiones: {EMBEDDING_DIMENSIONS}")
+    print(f"   ⚡ Velocidad: ~1 segundo por lote\n")
     
-    # Inicializar embeddings
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
+    # Verificar API key
+    if not OPENAI_API_KEY:
+        print("❌ ERROR: OPENAI_API_KEY no encontrada")
+        sys.exit(1)
+    
+    # Inicializar embeddings de OpenAI
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        openai_api_key=OPENAI_API_KEY,
+        chunk_size=1000,  # Procesar 1000 textos por lote
+        max_retries=3
     )
     
     print(f"📤 Indexando {len(chunks)} chunks en Elasticsearch...")
     print(f"   Índice: {ES_INDEX_NAME}")
-    print("   (Esto puede tardar varios minutos)\n")
+    print("   (Mucho más rápido que HuggingFace en CPU)\n")
     
     try:
         # Obtener configuración
@@ -256,7 +278,10 @@ def index_documents_to_elasticsearch(chunks):
             index_name=ES_INDEX_NAME,
             es_url=es_config["es_url"],
             es_user=es_config["es_user"],
-            es_password=es_config["es_password"]
+            es_password=es_config["es_password"],
+            bulk_kwargs={
+                "request_timeout": 120  # <-- ¡Añade esto!
+            }
         )
         
         print("✅ Documentos indexados exitosamente\n")
@@ -300,12 +325,13 @@ def main():
     """Función principal."""
     print("\n" + "🚀"*30)
     print("  INDEXADOR ELASTICSEARCH - Sistema CFA")
-    print("  LangChain 1.0 + Elasticsearch")
+    print("  LangChain 1.0 + OpenAI Embeddings")
     print("🚀"*30)
     
     print(f"\n📅 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📂 Libros: {BOOKS_DIR}")
-    print(f"📦 Índice ES: {ES_INDEX_NAME}\n")
+    print(f"📦 Índice ES: {ES_INDEX_NAME}")
+    print(f"🧠 Embeddings: {EMBEDDING_MODEL} (OpenAI)\n")
     
     # Confirmar
     response = input("¿Deseas continuar? (s/n): ")
@@ -352,6 +378,7 @@ def main():
         print(f"   - Documentos procesados: {len(documents)}")
         print(f"   - Chunks generados: {len(chunks)}")
         print(f"   - Índice Elasticsearch: {ES_INDEX_NAME}")
+        print(f"   - Embeddings: OpenAI {EMBEDDING_MODEL}")
         print(f"\n🎯 Los usuarios ya pueden consultar este material desde la app.\n")
         
     except KeyboardInterrupt:
