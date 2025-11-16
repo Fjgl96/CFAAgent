@@ -2,9 +2,6 @@
 
 Una aplicación web interactiva construida con Streamlit y LangGraph que actúa como un agente financiero inteligente. Es capaz de realizar diversos cálculos financieros estilo CFA mediante una arquitectura multi-agente supervisada.
 
-<p align="center">
-  <img src="URL_DE_TU_IMAGEN_O_GIF.png" alt="Demo del Agente Financiero" width="700"/>
-</p>
 
 ## 📋 Tabla de Contenidos
 1.  [Características](#-características-mvp)
@@ -33,7 +30,7 @@ Una aplicación web interactiva construida con Streamlit y LangGraph que actúa 
 
 
 <p align="center">
-  <img src="docs/architecture-diagram.png" alt="Arquitectura del Sistema" width="800"/>
+  <img src="architecture-diagram.png" alt="Arquitectura del Sistema" width="800"/>
 </p>
 
 El sistema utiliza una arquitectura multi-agente supervisada implementada con LangGraph:
