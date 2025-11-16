@@ -41,6 +41,7 @@ coverage.xml
 *.cover
 *.log
 *.pdf
+*.ipynb
 .pytest_cache/
 
 # Dependencias descargadas (si aplica)
