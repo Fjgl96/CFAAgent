@@ -1,24 +1,54 @@
-# requirements.txt
+# requirements.txt - LangChain 1.0 + Elasticsearch + LangSmith
 
-# Core Langchain & LangGraph (Usa las versiones más recientes o las que te funcionaron)
-langchain>=0.2.0 
-langgraph>=0.1.0 
-langchain-core>=0.2.0 
-langchain-anthropic>=0.1.0 
+# ========================================
+# Core LangChain & LangGraph - v1.0+
+# ========================================
+langchain>=0.3.7
+langgraph>=0.2.45
+langchain-core>=0.3.19
+langchain-anthropic>=0.3.0
 
-# Langchain Community (Necesaria para algunas utilidades base)
-langchain-community>=0.2.0
+# ========================================
+# LangChain Community
+# ========================================
+langchain-community>=0.3.7
 
+# ========================================
+# RAG - Elasticsearch Vector Store
+# ========================================
+elasticsearch>=8.15.0
+langchain-elasticsearch>=0.3.0
+sentence-transformers>=3.1.0
+
+# ========================================
+# Document Loaders
+# ========================================
+pypdf>=5.0.0
+unstructured>=0.16.0
+
+# ========================================
 # Cálculo Numérico
-numpy>=1.20 
-numpy-financial==1.0.0 # <--- Versión corregida a la última estable conocida
-scipy>=1.7 # Para norm.cdf en Black-Scholes
+# ========================================
+numpy>=1.26.0
+numpy-financial>=1.0.0
+scipy>=1.14.0
 
+# ========================================
 # Validación y Modelos
-pydantic>=2.0
+# ========================================
+pydantic>=2.9.0,<3.0
 
+# ========================================
 # Interfaz Web
-streamlit>=1.30 
+# ========================================
+streamlit>=1.39.0
 
-# Para cargar .env localmente (Recomendado)
+# ========================================
+# Utilidades
+# ========================================
 python-dotenv>=1.0.0
+
+# ========================================
+# LangSmith (Observabilidad)
+# ========================================
+langsmith>=0.1.0

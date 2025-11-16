@@ -1,7 +1,7 @@
-# (Añade esto a tus otros imports de tools)
-from langchain.tools import tool
+# tools/help_tools.py
+from langchain_core.tools import tool
 
-# Define tu guía de preguntas como una constante
+# Guía de preguntas
 GUIA_DE_PREGUNTAS = """
 Aquí tienes algunos ejemplos de lo que puedes pedirme:
 
@@ -14,6 +14,11 @@ Aquí tienes algunos ejemplos de lo que puedes pedirme:
 * **Gordon:** "Valora una acción con Gordon Growth. D1=$2.50, Ke=12%, g=4%."
 * **Call:** "Precio de opción call: S=100, K=105, T=0.5 años, r=5%, sigma=0.2."
 
+**Consultas Conceptuales (RAG - CFA):**
+* "¿Qué dice el material CFA sobre el WACC?"
+* "Explica el concepto de Duration según el CFA"
+* "Busca información sobre el modelo Gordon Growth en el CFA"
+* "¿Qué es el Beta según la documentación CFA?"
 """
 
 @tool
@@ -24,3 +29,5 @@ def obtener_ejemplos_de_uso() -> str:
     Devuelve una guía de preguntas y ejemplos de uso.
     """
     return GUIA_DE_PREGUNTAS
+
+print("✅ Módulo help_tools cargado.")

@@ -1,49 +1,41 @@
 # agents/financial_agents.py
+"""
+Agentes especializados financieros.
+Actualizado para LangChain 1.0+ con RAG integrado.
+"""
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
-# Importar create_react_agent desde langchain.agents (preferido en versiones > 0.2.1)
-try:
-    from langchain.agents import create_react_agent
-    print("✅ create_react_agent importado desde langchain.agents.")
-except ImportError:
-    # Fallback para versiones anteriores
-    from langgraph.prebuilt import create_react_agent
-    import warnings
-    warnings.warn("create_react_agent importado desde langgraph.prebuilt. Considera actualizar langchain.", DeprecationWarning)
-    print("⚠️ create_react_agent importado desde langgraph.prebuilt (fallback).")
-
-from typing import Literal # Asegúrate que Literal esté importado
+from langgraph.prebuilt import create_react_agent
+from typing import Literal
 from pydantic import BaseModel, Field
 
-# Importar LLM de config y herramientas individuales de tools
+# Importar LLM de config
 from config import get_llm
-from tools.financial_tools import ( # Importa las funciones tool directamente
+
+# Importar herramientas individuales
+from tools.financial_tools import (
     _calcular_valor_presente_bono, _calcular_van, _calcular_wacc,
     _calcular_gordon_growth, _calcular_capm, _calcular_sharpe_ratio,
     _calcular_opcion_call
 )
+from tools.help_tools import obtener_ejemplos_de_uso
 
-from tools.help_tools import obtener_ejemplos_de_uso # O desde 'help_tools' si lo separaste
+# Importar RAG
+from rag.financial_rag_elasticsearch import buscar_documentacion_financiera
 
-llm = get_llm() # Obtener la instancia singleton del LLM configurado
+llm = get_llm()
 
-# --- Creación de Agentes Especialistas (con Prompts Detallados) ---
+# --- Creación de Agentes Especialistas ---
 
 messages_placeholder = MessagesPlaceholder(variable_name="messages")
 
+
 def nodo_ayuda_directo(state: dict) -> dict:
-    """
-    Un nodo simple que NO usa un LLM.
-    Simplemente llama a la herramienta de ayuda y devuelve su contenido
-    directamente como un AIMessage.
-    """
+    """Nodo simple que llama a la herramienta de ayuda directamente."""
     print("\n--- NODO AYUDA (DIRECTO) ---")
     try:
-        # Llama a la herramienta de ayuda directamente. 
-        # .invoke({}) es necesario si la herramienta no toma argumentos.
         guia_de_preguntas = obtener_ejemplos_de_uso.invoke({})
-        
-        # Devuelve el resultado en el formato correcto para el estado
         return {
             "messages": [AIMessage(content=guia_de_preguntas)]
         }
@@ -54,20 +46,62 @@ def nodo_ayuda_directo(state: dict) -> dict:
         }
 
 
+def nodo_rag(state: dict) -> dict:
+    """Nodo que consulta la documentación CFA usando RAG."""
+    print("\n--- AGENTE RAG ---")
+    
+    # Extraer última pregunta del usuario
+    messages = state.get("messages", [])
+    if not messages:
+        return {
+            "messages": [AIMessage(
+                content="Error: No hay mensajes en el estado."
+            )]
+        }
+    
+    last_message = messages[-1]
+    
+    # Extraer contenido
+    if hasattr(last_message, 'content'):
+        consulta = last_message.content
+    else:
+        consulta = str(last_message)
+    
+    print(f"📚 Consulta CFA: {consulta}")
+    
+    # Buscar en documentación usando RAG
+    try:
+        resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
+        print(f"📄 Respuesta RAG generada")
+        
+        return {
+            "messages": [AIMessage(content=resultado)]
+        }
+    
+    except Exception as e:
+        print(f"❌ Error en RAG: {e}")
+        return {
+            "messages": [AIMessage(
+                content=f"Error al buscar en la documentación: {e}"
+            )]
+        }
+
+
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
     """Función helper para crear un agente reactivo con prompt de sistema."""
-    # Verificar que tools_list no esté vacía y contenga Runnables (tools)
     if not tools_list or not all(hasattr(t, 'invoke') for t in tools_list):
-         raise ValueError("tools_list debe contener al menos una herramienta válida (Runnable).")
-         
+        raise ValueError("tools_list debe contener al menos una herramienta válida (Runnable).")
+    
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt_text),
         messages_placeholder,
     ])
-    # Usar el factory importado
-    return create_react_agent(llm_instance, tools_list, prompt=prompt)
+    
+    # LangChain 1.0: create_react_agent de langgraph.prebuilt
+    return create_react_agent(llm_instance, tools_list, state_modifier=prompt)
 
-# Prompts Detallados (los que preferiste para intentar manejar historial)
+
+# Prompts Detallados
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija.
 Tu único trabajo es usar SÓLO tu herramienta 'calcular_valor_bono'.
 **NUNCA respondas usando tu conocimiento general.**
@@ -82,19 +116,17 @@ Tu trabajo es usar SÓLO tus herramientas 'calcular_van' y 'calcular_wacc'.
 1. Revisa el historial para encontrar los parámetros necesarios para tu herramienta.
 2. Llama a la herramienta adecuada ('calcular_van' o 'calcular_wacc').
 3. **NUNCA respondas usando tu conocimiento general.**
-4. Una vez que la herramienta te devuelva un JSON con el resultado (ej. **{{"van": -10791.49, ...}}**), formula tu respuesta.
-5. **IMPORTANTE: En tu respuesta, NO repitas los inputs del usuario** (como los flujos o la tasa). Simplemente reporta el resultado y la interpretación.
-   - **Ejemplo Correcto:** "El VAN del proyecto es -$10,791.49. Dado que es negativo, el proyecto no es rentable."
-   - **Ejemplo Incorrecto:** "El VAN para los flujos 30,000..."
-6. **Al final de tu respuesta, DEBES escribir la frase: "Tarea completada, devuelvo al supervisor."**
+4. Una vez que la herramienta te devuelva un JSON con el resultado, formula tu respuesta.
+5. **IMPORTANTE: En tu respuesta, NO repitas los inputs del usuario**. Simplemente reporta el resultado y la interpretación.
+6. **Al final de tu respuesta, DEBES escribir: "Tarea completada, devuelvo al supervisor."**
 
 Si te piden algo que no puedes hacer con tus herramientas, di "No es mi especialidad, devuelvo al supervisor."."""
 
 PROMPT_EQUITY = """Eres un especialista en valoración de acciones (Equity).
 Tu único trabajo es usar SÓLO tu herramienta 'calcular_gordon_growth'.
 **NUNCA respondas usando tu conocimiento general.**
-Revisa cuidadosamente el historial de mensajes. Si una tarea anterior calculó un valor necesario (como Ke o tasa de descuento), usa ESE valor.
-Extrae el 'dividendo_prox_periodo' (D1), la 'tasa_descuento_equity' (Ke) y la 'tasa_crecimiento_dividendos' (g) de la solicitud del usuario o del historial.
+Revisa cuidadosamente el historial de mensajes. Si una tarea anterior calculó un valor necesario (como Ke), usa ESE valor.
+Extrae el 'dividendo_prox_periodo' (D1), la 'tasa_descuento_equity' (Ke) y la 'tasa_crecimiento_dividendos' (g).
 Llama a tu herramienta con estos 3 parámetros.
 Si no puedes encontrar los 3 parámetros, di "Faltan parámetros, devuelvo al supervisor."."""
 
@@ -103,7 +135,7 @@ Tu trabajo es usar SÓLO tus herramientas 'calcular_capm' y 'calcular_sharpe_rat
 **NUNCA respondas usando tu conocimiento general.**
 Revisa cuidadosamente el historial de mensajes por si necesitas información previa.
 Extrae los parámetros necesarios de la solicitud o del historial y llama a la herramienta adecuada.
-Si te piden una tarea para la que no tienes herramienta (como 'calcular_gordon_growth'), **NO respondas a esa parte**.
+Si te piden una tarea para la que no tienes herramienta, **NO respondas a esa parte**.
 Responde SÓLO la parte que SÍ puedes hacer con tus herramientas.
 Luego, di "Tarea parcial completada, devuelvo al supervisor."."""
 
@@ -115,7 +147,7 @@ Extrae los parámetros necesarios (S, K, T, r, sigma) de la solicitud o del hist
 Si te piden algo que no puedes hacer con tu herramienta, di "No es mi especialidad, devuelvo al supervisor."."""
 
 
-# Crear agentes (manejar posibles errores en la creación)
+# Crear agentes
 try:
     agent_renta_fija = crear_agente_especialista(llm, [_calcular_valor_presente_bono], PROMPT_RENTA_FIJA)
     agent_fin_corp = crear_agente_especialista(llm, [_calcular_van, _calcular_wacc], PROMPT_FIN_CORP)
@@ -123,14 +155,13 @@ try:
     agent_portafolio = crear_agente_especialista(llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO)
     agent_derivados = crear_agente_especialista(llm, [_calcular_opcion_call], PROMPT_DERIVADOS)
 except Exception as e:
-     print(f"❌ ERROR CRÍTICO al crear agentes especialistas: {e}")
-     # En Streamlit, esto debería detener la app si ocurre al inicio
-     import streamlit as st
-     st.error(f"Error inicializando los agentes: {e}")
-     st.stop()
+    print(f"❌ ERROR CRÍTICO al crear agentes especialistas: {e}")
+    import streamlit as st
+    st.error(f"Error inicializando los agentes: {e}")
+    st.stop()
 
 
-# Diccionario de nodos de agente para el grafo
+# Diccionario de nodos
 agent_nodes = {
     "Agente_Renta_Fija": agent_renta_fija,
     "Agente_Finanzas_Corp": agent_fin_corp,
@@ -138,29 +169,29 @@ agent_nodes = {
     "Agente_Portafolio": agent_portafolio,
     "Agente_Derivados": agent_derivados,
     "Agente_Ayuda": nodo_ayuda_directo,
+    "Agente_RAG": nodo_rag,
 }
 
 # --- Supervisor ---
 
 class RouterSchema(BaseModel):
     """Elige el siguiente agente a llamar o finaliza."""
-    next_agent: Literal[ tuple(list(agent_nodes.keys()) + ["FINISH"]) ] # Usar tuple para Literal
-    # next_agent: Literal[
-    #     "Agente_Renta_Fija", "Agente_Finanzas_Corp", "Agente_Equity",
-    #     "Agente_Portafolio", "Agente_Derivados", "FINISH"
-    # ] = Field(description="El nombre del agente especialista para la tarea. Elige 'FINISH' si la solicitud fue completamente respondida.")
+    next_agent: Literal[tuple(list(agent_nodes.keys()) + ["FINISH"])] = Field(
+        description="El nombre del agente especialista para la tarea. Elige 'FINISH' si la solicitud fue completamente respondida."
+    )
 
-# Configurar el LLM supervisor para que use el schema de ruteo
+
+# Configurar el LLM supervisor
 try:
     supervisor_llm = llm.with_structured_output(RouterSchema)
 except Exception as e:
-     print(f"❌ ERROR configurando supervisor LLM con structured_output: {e}")
-     import streamlit as st
-     st.error(f"Error configurando el supervisor: {e}")
-     st.stop()
+    print(f"❌ ERROR configurando supervisor LLM con structured_output: {e}")
+    import streamlit as st
+    st.error(f"Error configurando el supervisor: {e}")
+    st.stop()
 
 
-# Prompt del supervisor (más robusto, incluye historial)
+# Prompt del supervisor
 supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el último mensaje del usuario Y el historial de la conversación para decidir qué especialista debe actuar A CONTINUACIÓN. No respondas tú mismo. SOLO elige el siguiente paso.
 
 Especialistas y sus ÚNICAS herramientas:
@@ -170,15 +201,34 @@ Especialistas y sus ÚNICAS herramientas:
 - Agente_Portafolio: `calcular_capm`, `calcular_sharpe_ratio`
 - Agente_Derivados: `calcular_opcion_call`
 - Agente_Ayuda: `obtener_ejemplos_de_uso`
+- Agente_RAG: `buscar_documentacion_financiera`
 
 PROCESO DE DECISIÓN:
-**1. PRIORIDAD MÁXIMA: Revisa el último mensaje del usuario. Si contiene EXCLUSIVAMENTE palabras clave de ayuda (como 'ayuda', 'ejemplos', 'qué puedes hacer', 'cómo te uso', 'guía'), elige 'Agente_Ayuda'.**
-**2. Si NO es una solicitud de ayuda explícita (como la del paso 1), ASUME que es una solicitud de cálculo.**
-3. Lee la solicitud de cálculo y revisa el historial. ¿Hay tareas pendientes?
-4. Basado en la tarea pendiente MÁS INMEDIATA, elige el agente especialista CORRECTO.
-5. Si el último agente completó su parte Y no quedan tareas pendientes, elige 'FINISH'.
-6. Si el último agente indicó un error ("No es mi especialidad", "Faltan parámetros"), y TÚ (supervisor) no ves una forma clara de redirigir, elige 'FINISH'.
+**1. PRIORIDAD MÁXIMA: Revisa el último mensaje del usuario.**
+
+**2. DETECCIÓN DE CONSULTAS RAG:**
+Si el usuario hace preguntas teóricas o de conceptos como:
+- "qué dice el material CFA sobre..."
+- "según el CFA..."
+- "explica el concepto de..."
+- "busca en la documentación..."
+- "qué es [concepto] según CFA..."
+→ Elige 'Agente_RAG'
+
+**3. DETECCIÓN DE CONSULTAS DE AYUDA:**
+Si el usuario usa palabras como "ayuda", "ejemplos", "qué puedes hacer", "cómo funciona":
+→ Elige 'Agente_Ayuda'
+
+**4. PARA CÁLCULOS NUMÉRICOS:**
+Elige el agente especialista apropiado según la herramienta necesaria.
+
+**5. Si el último agente completó su parte Y no quedan tareas pendientes:**
+→ Elige 'FINISH'
+
+**6. Si el último agente indicó un error y no hay forma de continuar:**
+→ Elige 'FINISH'
+
 SOLO devuelve el nombre del agente o "FINISH".
 """
 
-print("✅ Módulo financial_agents cargado (con prompts detallados).")
+print("✅ Módulo financial_agents cargado (LangChain 1.0 + RAG integrado).")
