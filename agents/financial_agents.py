@@ -1,14 +1,16 @@
 # agents/financial_agents.py
 """
-Agentes especializados financieros.
-Actualizado para LangGraph 1.0+ (versión moderna).
+Agentes especializados financieros - VERSIÓN MEJORADA.
+Actualizado para LangChain 1.0+ con RAG integrado.
+Prompts optimizados para control de recursión.
 """
 
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.prebuilt import create_react_agent
 from typing import Literal
 from pydantic import BaseModel, Field
-
+ 
 # Importar LLM de config
 from config import get_llm
 
@@ -23,31 +25,23 @@ from tools.help_tools import obtener_ejemplos_de_uso
 # Importar RAG
 from rag.financial_rag_elasticsearch import buscar_documentacion_financiera
 
-# Importar logger
-try:
-    from utils.logger import get_logger
-    logger = get_logger('agents')
-except ImportError:
-    import logging
-    logger = logging.getLogger('agents')
-
 llm = get_llm()
 
-# ========================================
-# NODOS ESPECIALES
-# ========================================
+# --- Creación de Agentes Especialistas ---
+
+messages_placeholder = MessagesPlaceholder(variable_name="messages")
+
 
 def nodo_ayuda_directo(state: dict) -> dict:
     """Nodo simple que llama a la herramienta de ayuda directamente."""
-    logger.info("📖 Nodo Ayuda invocado")
+    print("\n--- NODO AYUDA (DIRECTO) ---")
     try:
         guia_de_preguntas = obtener_ejemplos_de_uso.invoke({})
-        logger.debug("✅ Guía de ayuda generada")
         return {
             "messages": [AIMessage(content=guia_de_preguntas)]
         }
     except Exception as e:
-        logger.error(f"❌ Error en nodo_ayuda: {e}", exc_info=True)
+        print(f"❌ ERROR en nodo_ayuda_directo: {e}")
         return {
             "messages": [AIMessage(content=f"Error al obtener la guía de ayuda: {e}")]
         }
@@ -55,14 +49,15 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 def nodo_rag(state: dict) -> dict:
     """Nodo que consulta la documentación CFA usando RAG."""
-    logger.info("📚 Agente RAG invocado")
+    print("\n--- AGENTE RAG ---")
     
     # Extraer última pregunta del usuario
     messages = state.get("messages", [])
     if not messages:
-        logger.error("❌ Estado sin mensajes en nodo RAG")
         return {
-            "messages": [AIMessage(content="Error: No hay mensajes en el estado.")]
+            "messages": [AIMessage(
+                content="Error: No hay mensajes en el estado."
+            )]
         }
     
     last_message = messages[-1]
@@ -73,19 +68,19 @@ def nodo_rag(state: dict) -> dict:
     else:
         consulta = str(last_message)
     
-    logger.info(f"🔍 Consulta CFA: {consulta[:100]}...")
+    print(f"📚 Consulta CFA: {consulta}")
     
     # Buscar en documentación usando RAG
     try:
         resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
-        logger.info("✅ Respuesta RAG generada")
+        print(f"📄 Respuesta RAG generada")
         
         return {
             "messages": [AIMessage(content=resultado)]
         }
     
     except Exception as e:
-        logger.error(f"❌ Error en RAG: {e}", exc_info=True)
+        print(f"❌ Error en RAG: {e}")
         return {
             "messages": [AIMessage(
                 content=f"Error al buscar en la documentación: {e}"
@@ -93,198 +88,181 @@ def nodo_rag(state: dict) -> dict:
         }
 
 
-# ========================================
-# HELPER: CREAR AGENTE ESPECIALISTA (LANGGRAPH 1.0+)
-# ========================================
-def nodo_sintesis_rag(state: dict) -> dict:
-    """
-    Nodo que toma el contexto (del historial) y genera una síntesis.
-    """
-    logger.info("🧠 Nodo Síntesis RAG invocado")
-    messages = state.get("messages", [])
-    if not messages:
-        logger.error("❌ Estado sin mensajes en nodo Síntesis")
-        return {"messages": [AIMessage(content="Error: No hay mensajes en el estado.")]}
-    
-    try:
-        # 1. Bindea el LLM con el prompt de síntesis
-        llm_sintesis = llm.bind(system=PROMPT_SINTESIS_RAG)
-        
-        # 2. Pasa el historial de mensajes (que incluye la pregunta Y el contexto del RAG)
-        #    al LLM bindeado con el prompt de síntesis.
-        respuesta_sintetizada = llm_sintesis.invoke(messages)
-        
-        logger.info("✅ Respuesta RAG sintetizada")
-        return {
-            "messages": [respuesta_sintetizada] # La salida de invoke es una AIMessage
-        }
-    except Exception as e:
-        logger.error(f"❌ Error en nodo_sintesis_rag: {e}", exc_info=True)
-        return {"messages": [AIMessage(content=f"Error al sintetizar la respuesta: {e}")]}
-
 def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
-    """
-    Función helper para crear un agente reactivo con prompt de sistema.
-    COMPATIBLE CON LANGGRAPH 1.0.1+ (USA BIND)
-    
-    Args:
-        llm_instance: Instancia del LLM
-        tools_list: Lista de herramientas disponibles
-        system_prompt_text: Prompt del sistema para el agente
-    
-    Returns:
-        Agente compilado
-    """
+    """Función helper para crear un agente reactivo con prompt de sistema."""
     if not tools_list or not all(hasattr(t, 'invoke') for t in tools_list):
         raise ValueError("tools_list debe contener al menos una herramienta válida (Runnable).")
     
-    # LangGraph 1.0+: Bindear system prompt al LLM
-    # Esta es la única forma que funciona en LangGraph 1.0.1+
-    llm_with_system = llm_instance.bind(
-        system=system_prompt_text
-    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt_text),
+        messages_placeholder,
+    ])
     
-    # Crear agente SIN modificadores (solo model + tools)
-    agent = create_react_agent(
-        llm_with_system,
-        tools_list
-    )
-    
-    logger.debug(f"✅ Agente creado con {len(tools_list)} herramientas (LangGraph 1.0.1)")
-    
-    return agent
+    # LangChain 1.0: create_react_agent de langgraph.prebuilt
+    return create_react_agent(llm_instance, tools_list, state_modifier=prompt)
 
 
 # ========================================
-# PROMPTS DE AGENTES ESPECIALISTAS
+# PROMPTS MEJORADOS DE AGENTES ESPECIALISTAS
 # ========================================
 
-PROMPT_SINTESIS_RAG = """
-Eres un asistente financiero experto y un tutor de nivel CFA. Tu tono es profesional, servicial y analítico.
+PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija con una única responsabilidad: usar la herramienta 'calcular_valor_bono'.
 
-TAREA:
-Has recibido una pregunta de un usuario y el contexto relevante de los libros CFA.
-Tu trabajo es SINTETIZAR el contexto para generar una respuesta clara y concisa.
+**REGLAS ESTRICTAS:**
+1. NUNCA respondas usando tu conocimiento general del LLM
+2. SOLO puedes usar tu herramienta asignada
+3. Revisa TODO el historial de mensajes para encontrar parámetros necesarios
+4. Si encuentras todos los parámetros → Llama a tu herramienta
+5. Si faltan parámetros → Di: "Faltan parámetros: [lista específica]. Devuelvo al supervisor."
+6. Si te piden algo fuera de tu especialidad → Di: "No es mi especialidad. Devuelvo al supervisor."
 
-REGLAS ABSOLUTAS:
-1. NO copies y pegues el contexto. Debes leerlo y generar una respuesta con tus propias palabras (las del rol de experto).
-2. Basa tu respuesta ESTRICTAMENTE en el contexto proporcionado. No inventes información.
-3. Si el contexto no es suficiente, indica que la información no se encontró en los documentos.
-4. Al final de tu respuesta, DEBES citar tus fuentes. El contexto incluirá metadatos (ej. "source", "page_number").
+**FORMATO DE RESPUESTA DESPUÉS DE USAR TU HERRAMIENTA:**
+"El valor presente del bono es: [resultado]. 
+Interpretación: [breve explicación del resultado].
+Tarea completada. Devuelvo al supervisor."
 
-EJEMPLO DE RESPUESTA:
-[Tu párrafo de SÍNTESIS aquí...]
+**IMPORTANTE:** 
+- NO repitas los inputs del usuario en tu respuesta
+- Sé conciso: resultado + interpretación breve
+- SIEMPRE termina con "Devuelvo al supervisor"
+"""
 
----
-Fuentes:
-- CFA Level 1 2025 - Vol 2, Página 42
-- CFA Level 1 2025 - Vol 3, Página 108
-""" 
+PROMPT_FIN_CORP = """Eres un especialista en Finanzas Corporativas con acceso a dos herramientas: 'calcular_van' y 'calcular_wacc'.
+
+**REGLAS ESTRICTAS:**
+1. NUNCA respondas usando tu conocimiento general del LLM
+2. SOLO puedes usar tus dos herramientas asignadas
+3. Revisa TODO el historial para encontrar parámetros necesarios
+4. Identifica qué herramienta necesitas según la consulta
+5. Si encuentras todos los parámetros → Llama a la herramienta apropiada
+6. Si faltan parámetros → Di: "Faltan parámetros: [lista específica]. Devuelvo al supervisor."
+7. Si te piden algo fuera de tu especialidad → Di: "No es mi especialidad. Devuelvo al supervisor."
+
+**FORMATO DE RESPUESTA DESPUÉS DE USAR TU HERRAMIENTA:**
+
+Para VAN:
+"El VAN del proyecto es: [resultado].
+Interpretación: [Si VAN > 0: proyecto rentable | Si VAN < 0: proyecto no rentable].
+Tarea completada. Devuelvo al supervisor."
+
+Para WACC:
+"El WACC de la empresa es: [resultado]%.
+Interpretación: [Breve explicación del costo de capital calculado].
+Tarea completada. Devuelvo al supervisor."
+
+**IMPORTANTE:** 
+- NO repitas los inputs del usuario
+- Sé conciso y directo
+- SIEMPRE termina con "Devuelvo al supervisor"
+"""
+
+PROMPT_EQUITY = """Eres un especialista en valoración de Equity con una única responsabilidad: usar la herramienta 'calcular_gordon_growth'.
+
+**REGLAS ESTRICTAS:**
+1. NUNCA respondas usando tu conocimiento general del LLM
+2. SOLO puedes usar tu herramienta asignada
+3. Revisa TODO el historial para encontrar los 3 parámetros necesarios:
+   - D1 (dividendo próximo periodo)
+   - Ke (costo del equity / tasa de descuento)
+   - g (tasa de crecimiento)
+4. IMPORTANTE: Si otra tarea calculó Ke previamente, USA ese valor del historial
+5. Si encuentras los 3 parámetros → Llama a tu herramienta
+6. Si faltan parámetros → Di: "Faltan parámetros: [lista específica]. Devuelvo al supervisor."
+7. Si te piden algo fuera de tu especialidad → Di: "No es mi especialidad. Devuelvo al supervisor."
+
+**FORMATO DE RESPUESTA DESPUÉS DE USAR TU HERRAMIENTA:**
+"El valor intrínseco de la acción es: [resultado].
+Interpretación: [Breve explicación del resultado].
+Tarea completada. Devuelvo al supervisor."
+
+**IMPORTANTE:** 
+- NO repitas los inputs del usuario
+- Busca activamente en el historial valores calculados previamente
+- SIEMPRE termina con "Devuelvo al supervisor"
+"""
+
+PROMPT_PORTAFOLIO = """Eres un especialista en Gestión de Portafolios con acceso a dos herramientas: 'calcular_capm' y 'calcular_sharpe_ratio'.
+
+**REGLAS ESTRICTAS:**
+1. NUNCA respondas usando tu conocimiento general del LLM
+2. SOLO puedes usar tus dos herramientas asignadas
+3. Revisa TODO el historial para encontrar parámetros necesarios
+4. Identifica qué herramienta necesitas según la consulta
+5. Si encuentras todos los parámetros → Llama a la herramienta apropiada
+6. Si faltan parámetros → Di: "Faltan parámetros: [lista específica]. Devuelvo al supervisor."
+7. Si te piden algo fuera de tu especialidad → Di: "No es mi especialidad. Devuelvo al supervisor."
+
+**FORMATO DE RESPUESTA DESPUÉS DE USAR TU HERRAMIENTA:**
+
+Para CAPM:
+"El costo del equity (Ke) es: [resultado]%.
+Interpretación: [Breve explicación del resultado].
+Tarea completada. Devuelvo al supervisor."
+
+Para Sharpe Ratio:
+"El Sharpe Ratio del portafolio es: [resultado].
+Interpretación: [Breve explicación de la calidad del retorno ajustado por riesgo].
+Tarea completada. Devuelvo al supervisor."
+
+**IMPORTANTE:** 
+- NO repitas los inputs del usuario
+- Sé conciso y directo
+- SIEMPRE termina con "Devuelvo al supervisor"
+"""
+
+PROMPT_DERIVADOS = """Eres un especialista en Instrumentos Derivados con una única responsabilidad: usar la herramienta 'calcular_opcion_call'.
+
+**REGLAS ESTRICTAS:**
+1. NUNCA respondas usando tu conocimiento general del LLM
+2. SOLO puedes usar tu herramienta asignada (Black-Scholes para opciones Call europeas)
+3. Revisa TODO el historial para encontrar los 5 parámetros necesarios:
+   - S (precio actual del activo)
+   - K (precio de ejercicio)
+   - T (tiempo hasta vencimiento en años)
+   - r (tasa libre de riesgo)
+   - sigma (volatilidad)
+4. Si encuentras los 5 parámetros → Llama a tu herramienta
+5. Si faltan parámetros → Di: "Faltan parámetros: [lista específica]. Devuelvo al supervisor."
+6. Si te piden algo fuera de tu especialidad → Di: "No es mi especialidad. Devuelvo al supervisor."
+
+**FORMATO DE RESPUESTA DESPUÉS DE USAR TU HERRAMIENTA:**
+"El valor de la opción Call es: [resultado].
+Interpretación: [Breve explicación del resultado según Black-Scholes].
+Tarea completada. Devuelvo al supervisor."
+
+**IMPORTANTE:** 
+- NO repitas los inputs del usuario
+- Sé conciso y directo
+- SIEMPRE termina con "Devuelvo al supervisor"
+"""
 
 
-PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija.
-Tu único trabajo es usar SÓLO tu herramienta 'calcular_valor_bono'.
-**NUNCA respondas usando tu conocimiento general.**
-Revisa cuidadosamente el historial de mensajes por si necesitas información previa.
-Extrae los parámetros necesarios de la solicitud o del historial y llama a tu herramienta.
-Si te piden algo que no puedes hacer con tu herramienta, di "No es mi especialidad, devuelvo al supervisor."."""
-
-PROMPT_FIN_CORP = """Eres un especialista en Finanzas Corporativas.
-Tu trabajo es usar SÓLO tus herramientas 'calcular_van' y 'calcular_wacc'.
-
-**PROCESO A SEGUIR:**
-1. Revisa el historial para encontrar los parámetros necesarios para tu herramienta.
-2. Llama a la herramienta adecuada ('calcular_van' o 'calcular_wacc').
-3. **NUNCA respondas usando tu conocimiento general.**
-4. Una vez que la herramienta te devuelva un JSON con el resultado, formula tu respuesta.
-5. **IMPORTANTE: En tu respuesta, NO repitas los inputs del usuario**. Simplemente reporta el resultado y la interpretación.
-6. **Al final de tu respuesta, DEBES escribir: "Tarea completada, devuelvo al supervisor."**
-
-Si te piden algo que no puedes hacer con tus herramientas, di "No es mi especialidad, devuelvo al supervisor."."""
-
-PROMPT_EQUITY = """Eres un especialista en valoración de acciones (Equity).
-Tu único trabajo es usar SÓLO tu herramienta 'calcular_gordon_growth'.
-**NUNCA respondas usando tu conocimiento general.**
-Revisa cuidadosamente el historial de mensajes. Si una tarea anterior calculó un valor necesario (como Ke), usa ESE valor.
-Extrae el 'dividendo_prox_periodo' (D1), la 'tasa_descuento_equity' (Ke) y la 'tasa_crecimiento_dividendos' (g).
-Llama a tu herramienta con estos 3 parámetros.
-Si no puedes encontrar los 3 parámetros, di "Faltan parámetros, devuelvo al supervisor."."""
-
-PROMPT_PORTAFOLIO = """Eres un especialista en Gestión de Portafolios.
-Tu trabajo es usar SÓLO tus herramientas 'calcular_capm' y 'calcular_sharpe_ratio'.
-**NUNCA respondas usando tu conocimiento general.**
-Revisa cuidadosamente el historial de mensajes por si necesitas información previa.
-Extrae los parámetros necesarios de la solicitud o del historial y llama a la herramienta adecuada.
-Si te piden una tarea para la que no tienes herramienta, **NO respondas a esa parte**.
-Responde SÓLO la parte que SÍ puedes hacer con tus herramientas.
-Luego, di "Tarea parcial completada, devuelvo al supervisor."."""
-
-PROMPT_DERIVADOS = """Eres un especialista en instrumentos derivados.
-Tu único trabajo es usar SÓLO tu herramienta 'calcular_opcion_call'.
-**NUNCA respondas usando tu conocimiento general.**
-Revisa cuidadosamente el historial de mensajes por si necesitas información previa.
-Extrae los parámetros necesarios (S, K, T, r, sigma) de la solicitud o del historial y llama a tu herramienta.
-Si te piden algo que no puedes hacer con tu herramienta, di "No es mi especialidad, devuelvo al supervisor."."""
-
-# ========================================
-# CREACIÓN DE AGENTES
-# ========================================
-
-logger.info("🏗️ Inicializando agentes especialistas...")
-
+# Crear agentes con prompts mejorados
 try:
-    agent_renta_fija = crear_agente_especialista(
-        llm, [_calcular_valor_presente_bono], PROMPT_RENTA_FIJA
-    )
-    logger.debug("✅ Agente Renta Fija creado")
-    
-    agent_fin_corp = crear_agente_especialista(
-        llm, [_calcular_van, _calcular_wacc], PROMPT_FIN_CORP
-    )
-    logger.debug("✅ Agente Finanzas Corporativas creado")
-    
-    agent_equity = crear_agente_especialista(
-        llm, [_calcular_gordon_growth], PROMPT_EQUITY
-    )
-    logger.debug("✅ Agente Equity creado")
-    
-    agent_portafolio = crear_agente_especialista(
-        llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO
-    )
-    logger.debug("✅ Agente Portafolio creado")
-    agent_derivados = crear_agente_especialista(
-        llm, [_calcular_opcion_call], PROMPT_DERIVADOS
-    )
-    logger.debug("✅ Agente Derivados creado")
-    
-    logger.info("✅ Todos los agentes creados exitosamente")
-
+    agent_renta_fija = crear_agente_especialista(llm, [_calcular_valor_presente_bono], PROMPT_RENTA_FIJA)
+    agent_fin_corp = crear_agente_especialista(llm, [_calcular_van, _calcular_wacc], PROMPT_FIN_CORP)
+    agent_equity = crear_agente_especialista(llm, [_calcular_gordon_growth], PROMPT_EQUITY)
+    agent_portafolio = crear_agente_especialista(llm, [_calcular_capm, _calcular_sharpe_ratio], PROMPT_PORTAFOLIO)
+    agent_derivados = crear_agente_especialista(llm, [_calcular_opcion_call], PROMPT_DERIVADOS)
 except Exception as e:
-    logger.error(f"❌ ERROR CRÍTICO al crear agentes: {e}", exc_info=True)
+    print(f"❌ ERROR CRÍTICO al crear agentes especialistas: {e}")
     import streamlit as st
     st.error(f"Error inicializando los agentes: {e}")
     st.stop()
 
-# ========================================
-# DICCIONARIO DE NODOS
-# ========================================
 
+# Diccionario de nodos
 agent_nodes = {
-"Agente_Renta_Fija": agent_renta_fija,
+    "Agente_Renta_Fija": agent_renta_fija,
     "Agente_Finanzas_Corp": agent_fin_corp,
     "Agente_Equity": agent_equity,
     "Agente_Portafolio": agent_portafolio,
     "Agente_Derivados": agent_derivados,
     "Agente_Ayuda": nodo_ayuda_directo,
     "Agente_RAG": nodo_rag,
-    "Agente_Sintesis_RAG": nodo_sintesis_rag
 }
 
-logger.info(f"📋 {len(agent_nodes)} agentes registrados")
-
-# ========================================
-# SUPERVISOR
-# ========================================
+# --- Supervisor ---
 
 class RouterSchema(BaseModel):
     """Elige el siguiente agente a llamar o finaliza."""
@@ -292,58 +270,127 @@ class RouterSchema(BaseModel):
         description="El nombre del agente especialista para la tarea. Elige 'FINISH' si la solicitud fue completamente respondida."
     )
 
+
 # Configurar el LLM supervisor
 try:
     supervisor_llm = llm.with_structured_output(RouterSchema)
-    logger.info("✅ Supervisor LLM configurado")
 except Exception as e:
-    logger.error(f"❌ ERROR configurando supervisor: {e}", exc_info=True)
+    print(f"❌ ERROR configurando supervisor LLM con structured_output: {e}")
     import streamlit as st
     st.error(f"Error configurando el supervisor: {e}")
     st.stop()
 
+
 # ========================================
-# PROMPT DEL SUPERVISOR
+# PROMPT MEJORADO DEL SUPERVISOR
 # ========================================
 
-# En: agents/financial_agents.py
+supervisor_system_prompt = """Eres un supervisor eficiente de un equipo de analistas financieros especializados.
 
-supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el historial COMPLETO de la conversación y decidir el siguiente paso.
+**TU ÚNICA FUNCIÓN:** 
+Analizar el historial completo de la conversación y decidir:
+- ¿Qué especialista debe actuar AHORA?
+- ¿O ya terminamos la tarea? (FINISH)
 
-Especialistas:
-- Agente_Renta_Fija: `calcular_valor_bono`
-- Agente_Finanzas_Corp: `calcular_van`, `calcular_wacc`
-- Agente_Equity: `calcular_gordon_growth`
-- Agente_Portafolio: `calcular_capm`, `calcular_sharpe_ratio`
-- Agente_Derivados: `calcular_opcion_call`
-- Agente_Ayuda: `obtener_ejemplos_de_uso`
-- Agente_RAG: `buscar_documentacion_financiera` (SOLO BUSCA)
-- Agente_Sintesis_RAG: Sintetiza el contexto de Agente_RAG.
+**ESPECIALISTAS DISPONIBLES Y SUS HERRAMIENTAS:**
+- Agente_Renta_Fija: calcular_valor_bono
+- Agente_Finanzas_Corp: calcular_van, calcular_wacc
+- Agente_Equity: calcular_gordon_growth
+- Agente_Portafolio: calcular_capm, calcular_sharpe_ratio
+- Agente_Derivados: calcular_opcion_call
+- Agente_Ayuda: obtener_ejemplos_de_uso
+- Agente_RAG: buscar_documentacion_financiera
 
-PROCESO DE DECISIÓN (SIGUE ESTAS REGLAS EN ORDEN ESTRICTO):
+**PROCESO DE DECISIÓN (aplicar en este orden exacto):**
 
-**1. REGLA DE FINALIZACIÓN (MÁXIMA PRIORIDAD):**
-¿Es el último mensaje en el historial una respuesta FINAL y SINTETIZADA de 'Agente_Sintesis_RAG' o una respuesta de un agente de cálculo (como 'Agente_Finanzas_Corp')?
-SI ES SÍ: La tarea está 100% completada. No llames a ningún otro agente.
-→ Elige 'FINISH'
+1️⃣ **VERIFICAR SI YA TERMINAMOS:**
+   Elige 'FINISH' si:
+   - El último mensaje del asistente contiene un resultado numérico completo
+   - O el último mensaje dice "Tarea completada" o "Devuelvo al supervisor"
+   - Y NO hay una nueva pregunta del usuario después
+   - Y NO hay tareas pendientes sin resolver
+   
+   🚨 IMPORTANTE: Si el último agente completó su trabajo y reportó resultado, elige FINISH.
 
-**2. REGLA DE AYUDA (SEGUNDA PRIORIDAD):**
-¿Es el último mensaje del usuario Y pide "ayuda", "ejemplos", o "qué puedes hacer"?
-SI ES SÍ:
-→ Elige 'Agente_Ayuda'
+2️⃣ **DETECTAR TIPO DE CONSULTA DEL USUARIO:**
+   
+   A) **Consulta de Ayuda:**
+      Palabras clave: "ayuda", "ejemplos", "qué puedes hacer", "cómo funciona", "guía"
+      → Elige 'Agente_Ayuda'
+   
+   B) **Consulta Teórica/Conceptual:**
+      Patrones: "qué dice el CFA", "explica el concepto", "según CFA", "qué es", "busca en la documentación"
+      → Elige 'Agente_RAG'
+   
+   C) **Cálculo Financiero:**
+      Identifica la herramienta necesaria:
+      - VAN, NPV, TIR, flujos de caja, valor actual neto → Agente_Finanzas_Corp (usa calcular_van)
+      - WACC, costo de capital, estructura de capital → Agente_Finanzas_Corp (usa calcular_wacc)
+      - Bono, bond, cupón, YTM, yield → Agente_Renta_Fija
+      - Gordon, dividendos, valoración de acciones, DDM → Agente_Equity
+      - CAPM, beta, costo equity → Agente_Portafolio (usa calcular_capm)
+      - Sharpe, ratio, riesgo ajustado → Agente_Portafolio (usa calcular_sharpe_ratio)
+      - Opción, call, put, Black-Scholes → Agente_Derivados
 
-**3. REGLA DE BÚSQUEDA RAG (TERCERA PRIORIDAD):**
-¿Es el último mensaje del usuario Y es una pregunta teórica (ej. "qué es...", "explica...", "busca en la documentación...")?
-SI ES SÍ: (y la regla 1 no se aplicó)
-→ Elige 'Agente_RAG'
+3️⃣ **EVITAR BUCLES INFINITOS:**
+   - Revisa el historial: ¿el agente que vas a elegir ya fue llamado recientemente?
+   - Si sí, y no hay nueva información del usuario → Elige 'FINISH'
+   - NUNCA envíes al mismo agente dos veces consecutivas sin que haya nueva info del usuario
 
-**4. REGLA DE CÁLCULO (CUARTA PRIORIDAD):**
-¿Es el último mensaje del usuario Y pide un cálculo numérico (VAN, WACC, etc.)?
-SI ES SÍ: (y las reglas 1 y 2 no se aplicaron)
-→ Elige el agente especialista apropiado (ej. 'Agente_Finanzas_Corp').
+4️⃣ **MANEJO DE ERRORES:**
+   Si el último mensaje contiene:
+   - "No es mi especialidad" → Elige el agente apropiado
+   - "Faltan parámetros" → Si el usuario NO proporcionó nueva info → Elige 'FINISH'
+   - "Error" o "No puedo" → Intenta otro agente apropiado O elige 'FINISH'
 
-Si ninguna regla aplica, o si la tarea parece completada, elige 'FINISH'.
-SOLO devuelve el nombre del agente o "FINISH".
+5️⃣ **REGLA DE SEGURIDAD:**
+   Si NO estás seguro qué hacer → Elige 'FINISH'
+   (Es mejor terminar que crear un bucle infinito)
+
+**RESPUESTA REQUERIDA:**
+SOLO devuelve el nombre exacto del agente (ej: "Agente_Finanzas_Corp") o "FINISH".
+NO agregues explicaciones, razonamientos ni texto adicional.
+
+**EJEMPLOS DE DECISIÓN CORRECTA:**
+
+Ejemplo 1:
+Usuario: "Calcula el VAN: inversión 50k, flujos [15k, 20k, 25k], tasa 10%"
+Historial: Solo ese mensaje
+→ Decisión: Agente_Finanzas_Corp
+
+Ejemplo 2:
+Usuario: "Calcula el VAN: inversión 50k, flujos [15k, 20k, 25k], tasa 10%"
+Agente_Finanzas_Corp: "El VAN es 3,542.10. Proyecto rentable. Tarea completada."
+Historial: Solo esos 2 mensajes
+→ Decisión: FINISH
+
+Ejemplo 3:
+Usuario: "¿Qué es el WACC según el CFA?"
+Historial: Solo ese mensaje
+→ Decisión: Agente_RAG
+
+Ejemplo 4:
+Usuario: "Ayuda con ejemplos"
+Historial: Solo ese mensaje
+→ Decisión: Agente_Ayuda
+
+Ejemplo 5:
+Usuario: "Calcula WACC: Ke=12%, Kd=8%, E=60M, D=40M, impuestos=25%"
+Agente_Finanzas_Corp: "El WACC es 10.4%. Tarea completada."
+Usuario: "Ahora calcula el VAN con WACC de 10.4%, inversión 100k, flujos [30k, 40k, 50k]"
+→ Decisión: Agente_Finanzas_Corp
+
+Ejemplo 6:
+Usuario: "Calcula el VAN"
+Agente_Finanzas_Corp: "Faltan parámetros: inversión_inicial, flujos_caja, tasa_descuento."
+Historial: Solo esos 2 mensajes (usuario NO dio nueva info)
+→ Decisión: FINISH
+
+**RECUERDA:**
+- Analiza TODO el historial antes de decidir
+- Prioriza FINISH cuando la tarea esté completa
+- NO repitas agentes sin progreso
+- Sé conservador: ante duda, elige FINISH
 """
 
-logger.info("✅ Módulo financial_agents cargado (LangGraph 1.0.1+ usando bind)")
+print("✅ Módulo financial_agents cargado con prompts mejorados (LangChain 1.0 + RAG + control de recursión optimizado).")
