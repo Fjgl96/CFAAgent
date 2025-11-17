@@ -270,10 +270,10 @@ if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 2
             
             try:
                 # Log inicio de procesamiento
-                log_system_event('query', 
-                    query=prompt[:200], 
-                    thread_id=st.session_state.thread_id
-                )
+                log_system_event('query', details={
+                'query': prompt[:200],
+                'thread_id': st.session_state.thread_id
+                })
                 
                 # Invocar grafo
                 final_state = compiled_graph.invoke(graph_input, config=config)
@@ -315,11 +315,11 @@ if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 2
                 logger.error(f"❌ Error en runtime: {e}", exc_info=True)
                 
                 # Log error evento
-                log_system_event('error', 
-                    error_type='runtime_error',
-                    error_message=str(e),
-                    thread_id=st.session_state.thread_id
-                )
+                log_system_event('error', details={
+                'error_type': 'runtime_error',
+                'error_message': str(e),
+                'thread_id': st.session_state.thread_id
+                })
                 
                 st.error(
                     "Se produjo un error técnico. El equipo ha sido notificado. "
