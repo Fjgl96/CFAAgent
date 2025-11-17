@@ -63,7 +63,7 @@ def get_elasticsearch_client():
         es_client = Elasticsearch(
             [ES_URL],
             basic_auth=(ES_USERNAME, ES_PASSWORD),
-            verify_certs=False,  # ⚠️ En producción, usa certificados válidos
+            verify_certs=True,  # ⚠️ En producción, usa certificados válidos
             request_timeout=30,
             max_retries=3,
             retry_on_timeout=True
