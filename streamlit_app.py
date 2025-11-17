@@ -118,7 +118,7 @@ def verify_system_health():
         logger.error(f"❌ Tools fallaron: {e}")
     
     # Log evento de inicio
-    log_system_event('startup', health_status=health_status)
+    log_system_event('startup', details=health_status)
     
     return health_status
 
