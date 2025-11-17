@@ -8,6 +8,19 @@ import os
 from pathlib import Path
 import streamlit as st
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+
+
+try:
+    from anthropic import AuthenticationError as AnthropicAuthError
+except ImportError:
+    # Fallback por si la librería no está
+    AnthropicAuthError = type('AnthropicAuthError', (Exception,), {})
+
+try:
+    from openai import AuthenticationError as OpenAIAuthError
+except ImportError:
+    OpenAIAuthError = type('OpenAIAuthError', (Exception,), {})
 
 # ========================================
 # PATHS DEL PROYECTO
@@ -110,26 +123,89 @@ LLM_TEMPERATURE = 0.1
 
 _llm_instance = None
 
-def get_llm():
-    """Retorna una instancia singleton configurada del LLM."""
-    global _llm_instance
-    if _llm_instance is None:
-        if not ANTHROPIC_API_KEY:
-            st.error("No se pudo inicializar el LLM: API Key no disponible.")
-            st.stop()
-        try:
-            _llm_instance = ChatAnthropic(
-                model=LLM_MODEL,
-                temperature=LLM_TEMPERATURE,
-                api_key=ANTHROPIC_API_KEY
-            )
-            print(f"🧠 Instancia LLM ({LLM_MODEL}, temp={LLM_TEMPERATURE}) creada.")
-        except Exception as e:
-            st.error(f"Error al crear la instancia del LLM: {e}")
-            print(f"❌ Error al crear LLM: {e}")
-            st.stop()
-    return _llm_instance
+LLM_MODEL_PRIMARY = "claude-3-5-haiku-20241022" # Modelo actualizado
+LLM_MODEL_FALLBACK = "gpt-4o" # Modelo de respaldo
+LLM_TEMPERATURE = 0.0 # Tu temperatura original era 0.1, 0.0 es mejor para agentes
 
+_llm_instance = None
+
+# --- ¡AQUÍ ESTÁ LA NUEVA FUNCIÓN 'get_llm'! ---
+def get_llm():
+    """
+    Crea una instancia singleton de LLM con fallback en tiempo de ejecución.
+    Intenta Claude (Primario), si falla, usa OpenAI (Fallback).
+    Maneja errores de autenticación al inicio.
+    """
+    global _llm_instance
+    
+    # Si la instancia ya existe, la devuelve
+    if _llm_instance is not None:
+        return _llm_instance
+
+    # Si no, la crea (Lógica de Fallback)
+    print("🧠 Creando instancia singleton de LLM con fallback...")
+    
+    llm_primary = None
+    llm_fallback = None
+
+    # 1. Configurar el LLM Principal (Claude)
+    try:
+        if not ANTHROPIC_API_KEY:
+            raise AnthropicAuthError("ANTHROPIC_API_KEY no encontrada.")
+            
+        llm_primary = ChatAnthropic(
+            model=LLM_MODEL_PRIMARY,
+            temperature=LLM_TEMPERATURE,
+            api_key=ANTHROPIC_API_KEY
+        )
+        llm_primary.invoke("Ping test") # Validar la key
+        
+    except AnthropicAuthError as e:
+        st.warning(f"⚠️ Auth Error en Claude: {e}")
+    except Exception as e:
+        st.warning(f"⚠️ Error al inicializar Claude: {e}")
+
+    # 2. Configurar el LLM de Fallback (OpenAI)
+    try:
+        if not OPENAI_API_KEY:
+            raise OpenAIAuthError("OPENAI_API_KEY no encontrada.")
+            
+        llm_fallback = ChatOpenAI(
+            model=LLM_MODEL_FALLBACK,
+            temperature=LLM_TEMPERATURE,
+            api_key=OPENAI_API_KEY
+        )
+        llm_fallback.invoke("Ping test") # Validar la key
+        
+    except OpenAIAuthError as e:
+        st.warning(f"⚠️ Auth Error en OpenAI: {e}")
+    except Exception as e:
+        st.warning(f"⚠️ Error al inicializar OpenAI: {e}")
+
+    # 3. Crear el LLM final y guardarlo en el singleton
+    
+    if llm_primary:
+        if llm_fallback:
+            # Caso Ideal: Claude funciona, OpenAI es el respaldo
+            print("✅ LLM configurado: Claude (Primario) con Fallback a OpenAI.")
+            _llm_instance = llm_primary.with_fallbacks([llm_fallback])
+        else:
+            # Solo Claude está disponible
+            print("✅ LLM configurado: Claude (Primario). Fallback no disponible.")
+            _llm_instance = llm_primary
+            
+    elif llm_fallback:
+        # Solo OpenAI está disponible (Claude falló al inicio)
+        print("⚠️ LLM configurado: OpenAI (Fallback) únicamente. Claude falló al iniciar.")
+        _llm_instance = llm_fallback
+        
+    else:
+        # ¡NUEVO! Caso en que NINGUNO funcionó
+        st.error("❌ ERROR CRÍTICO: No se pudo inicializar ningún modelo LLM.")
+        print("❌ ERROR CRÍTICO: Fallo en la autenticación de TODOS los modelos LLM.")
+        st.stop() # Detener la aplicación si no hay ningún LLM
+
+    return _llm_instance
 # ========================================
 # OTRAS CONFIGURACIONES
 # ========================================
