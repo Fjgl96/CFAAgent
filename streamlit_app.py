@@ -139,8 +139,8 @@ import os
 # HEADER Y STATUS
 # ========================================
 
-st.title("💰 Agente Financiero Profesional")
-st.caption("Impulsado por LangGraph, Anthropic Claude y RAG (Elasticsearch)")
+st.title("Compañero de estudio Financiero ")
+st.caption("Con LangGraph, LLM y  RAG (Elasticsearch)")
 
 # Mostrar LangSmith status
 if LANGSMITH_ENABLED:

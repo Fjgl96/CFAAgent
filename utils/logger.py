@@ -1,106 +1,131 @@
 # utils/logger.py
 """
-Sistema de logging centralizado.
-Proporciona loggers configurados con rotación de archivos y formato estructurado.
+Sistema de logging compatible con Streamlit Cloud y desarrollo local.
 """
 
 import logging
 import sys
 from pathlib import Path
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
 
-# Crear directorio de logs si no existe
-LOGS_DIR = Path("/mnt/user-data/shared/logs")
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
+# ========================================
+# DETECCIÓN DE ENTORNO
+# ========================================
+
+def is_streamlit_cloud():
+    """Detecta si la app está corriendo en Streamlit Cloud."""
+    import os
+    # Streamlit Cloud tiene estas variables de entorno o paths
+    return (
+        os.getenv('STREAMLIT_SHARING_MODE') or 
+        os.path.exists('/mount/src') or
+        os.getenv('HOME', '').startswith('/home/appuser')
+    )
+
+# ========================================
+# CONFIGURACIÓN DE LOGS
+# ========================================
+
+# En Streamlit Cloud, los logs solo van a console (stderr)
+# Streamlit Cloud captura automáticamente los logs de console
+USE_FILE_LOGGING = not is_streamlit_cloud()
+
+if USE_FILE_LOGGING:
+    # Desarrollo local - escribir a archivo
+    try:
+        LOGS_DIR = Path("/mnt/user-data/shared/logs")
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError):
+        # Fallback a directorio local
+        LOGS_DIR = Path("./logs")
+        try:
+            LOGS_DIR.mkdir(exist_ok=True)
+        except:
+            USE_FILE_LOGGING = False
 
 # Formato de logs
 LOG_FORMAT = '%(asctime)s | %(name)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
-# Diccionario de loggers creados (singleton pattern)
-_loggers = {}
-
+# ========================================
+# FUNCIÓN PRINCIPAL
+# ========================================
 
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """
-    Obtiene o crea un logger configurado.
+    Obtiene un logger configurado.
     
     Args:
-        name: Nombre del módulo (ej: 'rag', 'agents', 'tools')
+        name: Nombre del logger (ej: 'streamlit', 'agents', 'tools')
         level: Nivel de logging (default: INFO)
     
     Returns:
-        Logger configurado con handlers de archivo y consola
+        Logger configurado
     """
-    # Si ya existe, retornarlo
-    if name in _loggers:
-        return _loggers[name]
-    
-    # Crear nuevo logger
     logger = logging.getLogger(name)
-    logger.setLevel(level)
     
-    # Evitar duplicación de handlers
+    # Evitar duplicar handlers si ya existe
     if logger.handlers:
         return logger
     
-    # ========================================
-    # HANDLER 1: ARCHIVO (con rotación)
-    # ========================================
-    log_file = LOGS_DIR / f"{name}.log"
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
-    file_handler.setFormatter(file_formatter)
+    logger.setLevel(level)
+    formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
     
-    # ========================================
-    # HANDLER 2: CONSOLA
-    # ========================================
+    # Handler para console (siempre)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter(
-        '%(levelname)s | %(name)s | %(message)s'
-    )
-    console_handler.setFormatter(console_formatter)
-    
-    # Agregar handlers
-    logger.addHandler(file_handler)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # Guardar en caché
-    _loggers[name] = logger
+    # Handler para archivo (solo en desarrollo local)
+    if USE_FILE_LOGGING:
+        try:
+            log_filename = LOGS_DIR / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
+            file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except Exception as e:
+            # Si falla el file handler, seguir con console solamente
+            logger.warning(f"No se pudo crear file handler: {e}")
+    
+    # No propagar al root logger
+    logger.propagate = False
     
     return logger
 
+# ========================================
+# FUNCIÓN AUXILIAR PARA EVENTOS
+# ========================================
 
-def log_system_event(event_type: str, **kwargs):
+def log_system_event(event_type: str, details: dict, logger_name: str = 'system'):
     """
-    Registra eventos del sistema en log dedicado.
+    Registra un evento del sistema.
     
     Args:
-        event_type: Tipo de evento ('startup', 'error', 'query', etc)
-        **kwargs: Datos adicionales del evento
+        event_type: Tipo de evento (ej: 'query', 'error', 'calculation')
+        details: Detalles del evento como dict
+        logger_name: Nombre del logger a usar
     """
-    system_logger = get_logger('system_events')
+    logger = get_logger(logger_name)
     
-    event_data = {
-        'timestamp': datetime.now().isoformat(),
-        'event_type': event_type,
-        **kwargs
-    }
+    # Formatear mensaje
+    details_str = " | ".join([f"{k}={v}" for k, v in details.items()])
+    message = f"[{event_type.upper()}] {details_str}"
     
-    system_logger.info(f"SYSTEM_EVENT: {event_data}")
+    # Log según tipo
+    if event_type.lower() in ['error', 'exception']:
+        logger.error(message)
+    elif event_type.lower() == 'warning':
+        logger.warning(message)
+    else:
+        logger.info(message)
 
+# ========================================
+# INFO AL IMPORTAR
+# ========================================
 
-# Logger por defecto para el módulo
-logger = get_logger('main')
-
-# Log de inicialización
-logger.info("✅ Sistema de logging inicializado")
-logger.debug(f"   Directorio de logs: {LOGS_DIR}")
+if __name__ != "__main__":
+    env = "Streamlit Cloud" if is_streamlit_cloud() else "Local"
+    file_logging = "habilitado" if USE_FILE_LOGGING else "deshabilitado"
+    print(f"✅ Logger inicializado | Entorno: {env} | File logging: {file_logging}")
