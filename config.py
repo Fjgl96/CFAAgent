@@ -22,22 +22,61 @@ try:
 except ImportError:
     OpenAIAuthError = type('OpenAIAuthError', (Exception,), {})
 
+
+
+try:
+    from utils.logger import is_streamlit_cloud
+except ImportError:
+    # Fallback por si la importación falla (ej. si está en otro dir)
+    def is_streamlit_cloud():
+        """Detecta si la app está corriendo en Streamlit Cloud."""
+        import os
+        return os.getenv('STREAMLIT_IN_CLOUD') == 'true'
+
+IS_IN_CLOUD = is_streamlit_cloud()
 # ========================================
-# PATHS DEL PROYECTO
+# PATHS DEL PROYECTO (CORREGIDO)
 # ========================================
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Directorio compartido (persistente)
-SHARED_DIR = Path("/mnt/user-data/shared")
-SHARED_DIR.mkdir(parents=True, exist_ok=True)
+if IS_IN_CLOUD:
+    # En Streamlit Cloud, usa rutas relativas (que son efímeras)
+    # Si NO necesitas guardar/leer archivos, puedes omitir esto.
+    # Si SÍ necesitas leer archivos (ej. un CSV), inclúyelos en tu repo y usa rutas relativas.
+    print("☁️ Entorno: Streamlit Cloud. Usando rutas relativas.")
+    SHARED_DIR = BASE_DIR / "shared_data" 
+    DOCS_DIR = SHARED_DIR / "docs"
+    LOGS_DIR = BASE_DIR / "logs_temp" # El logging a archivo está deshabilitado
+else:
+    # En Local, usa tu ruta persistente
+    print("💻 Entorno: Local. Usando /mnt/user-data/shared.")
+    SHARED_DIR = Path("/mnt/user-data/shared")
 
-# Subdirectorios
-DOCS_DIR = SHARED_DIR / "docs"
-LOGS_DIR = SHARED_DIR / "logs"
-DOCS_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True)
-
+# --- Solo intenta crear directorios si estás en local ---
+if not IS_IN_CLOUD:
+    try:
+        SHARED_DIR.mkdir(parents=True, exist_ok=True)
+        DOCS_DIR = SHARED_DIR / "docs"
+        LOGS_DIR = SHARED_DIR / "logs"
+        DOCS_DIR.mkdir(exist_ok=True)
+        LOGS_DIR.mkdir(exist_ok=True)
+        print(f"✅ Directorios locales verificados en {SHARED_DIR}")
+    except PermissionError:
+        print(f"❌ Permiso denegado para escribir en {SHARED_DIR}. Revisa tus permisos locales.")
+        # Fallback a rutas locales relativas si /mnt falla
+        SHARED_DIR = BASE_DIR / "shared_data"
+        DOCS_DIR = SHARED_DIR / "docs"
+        LOGS_DIR = BASE_DIR / "logs_temp"
+        
+if IS_IN_CLOUD:
+    # Asegura que las variables existan
+    DOCS_DIR = SHARED_DIR / "docs"
+    LOGS_DIR = BASE_DIR / "logs_temp"
+    
+    # En la nube, SÍ necesitas crear los directorios relativos si vas a usarlos
+    # (ej. para subir un archivo y procesarlo)
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
 # ========================================
 # API KEYS
 # ========================================
@@ -265,7 +304,7 @@ def check_system_health() -> dict:
     return health
 
 
-def log_event(event_type: str, data: dict) -> bool:
+'''def log_event(event_type: str, data: dict) -> bool:
     """Registra eventos en el log correspondiente."""
     import json
     from datetime import datetime
@@ -293,5 +332,5 @@ def log_event(event_type: str, data: dict) -> bool:
     except Exception as e:
         print(f"❌ Error logging event: {e}")
         return False
-
+'''
 print("✅ Módulo config cargado (LangChain 1.0 + LangSmith + OpenAI).")

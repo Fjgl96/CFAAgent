@@ -15,11 +15,57 @@ from datetime import datetime
 
 # Importar logger
 try:
-    from utils.logger import get_logger, log_system_event
-    logger = get_logger('streamlit')
+    from utils.logger import is_streamlit_cloud
 except ImportError:
-    import logging
-    logger = logging.getLogger('streamlit')
+    # Fallback por si la importación falla (ej. si está en otro dir)
+    def is_streamlit_cloud():
+        """Detecta si la app está corriendo en Streamlit Cloud."""
+        import os
+        return os.getenv('STREAMLIT_IN_CLOUD') == 'true'
+
+IS_IN_CLOUD = is_streamlit_cloud()
+
+
+
+BASE_DIR = Path(__file__).resolve().parent
+
+if IS_IN_CLOUD:
+    # En Streamlit Cloud, usa rutas relativas (que son efímeras)
+    # Si NO necesitas guardar/leer archivos, puedes omitir esto.
+    # Si SÍ necesitas leer archivos (ej. un CSV), inclúyelos en tu repo y usa rutas relativas.
+    print("☁️ Entorno: Streamlit Cloud. Usando rutas relativas.")
+    SHARED_DIR = BASE_DIR / "shared_data" 
+    DOCS_DIR = SHARED_DIR / "docs"
+    LOGS_DIR = BASE_DIR / "logs_temp" # El logging a archivo está deshabilitado
+else:
+    # En Local, usa tu ruta persistente
+    print("💻 Entorno: Local. Usando /mnt/user-data/shared.")
+    SHARED_DIR = Path("/mnt/user-data/shared")
+
+# --- Solo intenta crear directorios si estás en local ---
+if not IS_IN_CLOUD:
+    try:
+        SHARED_DIR.mkdir(parents=True, exist_ok=True)
+        DOCS_DIR = SHARED_DIR / "docs"
+        LOGS_DIR = SHARED_DIR / "logs"
+        DOCS_DIR.mkdir(exist_ok=True)
+        LOGS_DIR.mkdir(exist_ok=True)
+        print(f"✅ Directorios locales verificados en {SHARED_DIR}")
+    except PermissionError:
+        print(f"❌ Permiso denegado para escribir en {SHARED_DIR}. Revisa tus permisos locales.")
+        # Fallback a rutas locales relativas si /mnt falla
+        SHARED_DIR = BASE_DIR / "shared_data"
+        DOCS_DIR = SHARED_DIR / "docs"
+        LOGS_DIR = BASE_DIR / "logs_temp"
+        
+if IS_IN_CLOUD:
+    # Asegura que las variables existan
+    DOCS_DIR = SHARED_DIR / "docs"
+    LOGS_DIR = BASE_DIR / "logs_temp"
+    
+    # En la nube, SÍ necesitas crear los directorios relativos si vas a usarlos
+    # (ej. para subir un archivo y procesarlo)
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ========================================
 # CONFIGURACIÓN DE PÁGINA
