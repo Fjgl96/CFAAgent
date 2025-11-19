@@ -62,7 +62,7 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 
 def nodo_rag(state: dict) -> dict:
-    """Nodo que consulta la documentación CFA usando RAG."""
+    """Nodo que consulta material financiero usando RAG."""
     logger.info("📚 Agente RAG invocado")
     
     # Extraer última pregunta del usuario
@@ -81,22 +81,22 @@ def nodo_rag(state: dict) -> dict:
     else:
         consulta = str(last_message)
     
-    logger.info(f"🔍 Consulta CFA: {consulta[:100]}...")
-    
-    # Buscar en documentación usando RAG
+    logger.info(f"🔍 Consulta financiera: {consulta[:100]}...")
+
+    # Buscar en material financiero usando RAG
     try:
         resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
         logger.info("✅ Respuesta RAG generada")
-        
+
         return {
             "messages": [AIMessage(content=resultado)]
         }
-    
+
     except Exception as e:
         logger.error(f"❌ Error en RAG: {e}", exc_info=True)
         return {
             "messages": [AIMessage(
-                content=f"Error al buscar en la documentación: {e}"
+                content=f"Error al buscar en el material de estudio: {e}"
             )]
         }
 
@@ -141,7 +141,7 @@ def nodo_sintesis_rag(state: dict) -> dict:
         llm_sintesis = llm.bind(system=PROMPT_SINTESIS_RAG)
         
         # 4. Crear mensaje de usuario limpio
-        user_prompt = f"""**CONTEXTO DE DOCUMENTOS CFA:**
+        user_prompt = f"""**CONTEXTO DEL MATERIAL FINANCIERO:**
         {rag_context}
 
         **PREGUNTA DEL USUARIO:**
@@ -225,16 +225,16 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 # PROMPTS DE AGENTES ESPECIALISTAS
 # ========================================
 
-PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor de nivel CFA.
+PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor especializado en finanzas.
 
 **TU ÚNICA TAREA:**
-Sintetizar el contexto de los documentos CFA (en inglés) para responder en ESPAÑOL la pregunta del usuario.
+Sintetizar el contexto del material financiero (en inglés) para responder en ESPAÑOL la pregunta del usuario.
 
 **INSTRUCCIONES CRÍTICAS:**
-1. Lee SOLO el contexto proporcionado en "CONTEXTO DE DOCUMENTOS CFA"
+1. Lee SOLO el contexto proporcionado en "CONTEXTO DEL MATERIAL FINANCIERO"
 2. Responde en ESPAÑOL, con TUS PROPIAS PALABRAS (parafrasea, NO copies fragmentos literales)
 3. Basa tu respuesta EXCLUSIVAMENTE en el contexto dado
-4. Si el contexto es insuficiente → Di: "La información solicitada no se encontró en los documentos CFA disponibles"
+4. Si el contexto es insuficiente → Di: "La información solicitada no se encontró en el material de estudio disponible"
 5. SIEMPRE cita las fuentes al final
 
 **MANEJO DE TÉRMINOS TÉCNICOS (MUY IMPORTANTE):**
@@ -539,7 +539,7 @@ except Exception as e:
 
 # En: agents/financial_agents.py
 
-supervisor_system_prompt = """Eres un supervisor eficiente de un equipo de analistas financieros especializados en CFA Level I.
+supervisor_system_prompt = """Eres un supervisor eficiente de un equipo de analistas financieros especializados.
 
 **TU MISIÓN:** Analizar el historial COMPLETO y decidir el ÚNICO próximo paso.
 
@@ -562,7 +562,7 @@ supervisor_system_prompt = """Eres un supervisor eficiente de un equipo de anali
 
 - `Agente_Ayuda`: Muestra guía de uso con ejemplos
 
-- `Agente_RAG`: Busca en documentación CFA (luego auto-sintetiza)
+- `Agente_RAG`: Busca en material de estudio financiero (luego auto-sintetiza)
 
 **⚠️ NOTA CRÍTICA:** Agente_RAG y Agente_Sintesis_RAG trabajan en CADENA automática.
 NO los llames por separado. Agente_RAG → Agente_Sintesis_RAG → FIN (automático).
@@ -606,7 +606,7 @@ Supervisor → FINISH
 
 **Caso 2: Pregunta teórica (RAG)**
 ```
-Usuario: "¿Qué es el WACC según el CFA?"
+Usuario: "¿Qué es el WACC?"
 Supervisor → Agente_RAG
 [Agente_RAG → busca → auto-sintetiza → FIN]
 ```

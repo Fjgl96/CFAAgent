@@ -16,18 +16,21 @@ Una aplicación web interactiva construida con Streamlit y LangGraph que actúa 
 
 * **Interfaz Web Interactiva:** Creada con Streamlit para facilitar las consultas.
 * **Arquitectura Multi-Agente:** Utiliza LangGraph con un agente "Supervisor" que direcciona las consultas al especialista adecuado.
-* **Sistema RAG Integrado:** Búsqueda semántica en documentación CFA usando Elasticsearch + HuggingFace Embeddings.
-* **Agentes Especialistas:**
-    * Renta Fija (Valoración de Bonos)
-    * Finanzas Corporativas (VAN, WACC)
-    * Equity (Gordon Growth)
-    * Portafolio (CAPM, Sharpe Ratio)
-    * Derivados (Opciones Call - Black-Scholes)
-    * RAG (Consultas a documentación CFA)
+* **Sistema RAG Integrado:** Búsqueda semántica en material financiero usando Elasticsearch + OpenAI Embeddings.
+* **22 Herramientas Financieras de CFA Level I:**
+    * **Renta Fija (6):** Valoración de Bonos, Duration Macaulay, Duration Modificada, Convexity, Current Yield, Bonos Cupón Cero
+    * **Finanzas Corporativas (5):** VAN (NPV), WACC, TIR (IRR), Payback Period, Profitability Index
+    * **Equity (1):** Gordon Growth Model (DDM)
+    * **Portafolio (7):** CAPM, Sharpe Ratio, Treynor Ratio, Jensen's Alpha, Beta de Portafolio, Retorno Esperado, Desviación Estándar
+    * **Derivados (3):** Opciones Call/Put (Black-Scholes), Put-Call Parity
+* **8 Agentes Especialistas:**
+    * Renta Fija, Finanzas Corporativas, Equity, Portafolio, Derivados
+    * RAG (Consultas a material de estudio)
+    * Síntesis RAG (Generación de respuestas contextuales)
     * Ayuda (Guía de uso)
 * **Modelo de Lenguaje:** Impulsado por Anthropic Claude 3.5 Haiku (configurable).
 * **Observabilidad:** Integración opcional con LangSmith para tracing y debugging.
-* **Manejo de Errores:** Incluye un "Circuit Breaker" básico para evitar bucles infinitos.
+* **Manejo de Errores:** Incluye un "Circuit Breaker" inteligente para evitar bucles infinitos.
 * **Seguridad:** Configuración de API Keys mediante variables de entorno y Streamlit Secrets (no hardcodeado).
 * **Código Estructurado:** Organizado en módulos para mejor mantenibilidad (`config`, `tools`, `agents`, `graph`, `rag`).
 
@@ -52,7 +55,7 @@ flowchart TD
     SUPERVISOR -->|Opciones Call| DERIV[💹 AGENTE DERIVADOS<br/>calcular_opcion_call]
     
     RAG --> RAGVS[(🔍 ELASTICSEARCH<br/>Vector Store<br/>Embeddings)]
-    RAGVS --> RAGDOCS[📄 Docs CFA<br/>Fragmentos Relevantes]
+    RAGVS --> RAGDOCS[📄 Material Financiero<br/>Fragmentos Relevantes]
     RAGDOCS --> RAGEND[Respuesta Contextual]
     
     HELP --> HELPEND[Guía de Preguntas]
@@ -106,10 +109,10 @@ flowchart TD
 
 ### Componentes Principales:
 - **Portal de Entrada:** Streamlit UI para captura de consultas
-- **Supervisor:** Orquestador inteligente con Claude 3.5 Haiku
-- **7 Agentes Especializados:** Renta Fija, Finanzas Corp, Equity, Portafolio, Derivados, RAG, Ayuda
-- **7 Python Tools:** Cálculos deterministas con numpy/scipy
-- **Sistema RAG:** Elasticsearch + HuggingFace Embeddings para búsqueda semántica
+- **Supervisor:** Orquestador inteligente con Claude 3.5 Haiku y Circuit Breaker
+- **8 Agentes Especializados:** Renta Fija, Finanzas Corp, Equity, Portafolio, Derivados, RAG, Síntesis RAG, Ayuda
+- **22 Python Tools:** Cálculos deterministas de CFA Level I con numpy/scipy
+- **Sistema RAG:** Elasticsearch + OpenAI Embeddings para búsqueda semántica
 - **MemorySaver:** Persistencia de contexto durante la sesión
 
 ## 🚀 Ejemplos de Uso (Guía de Preguntas)
@@ -122,29 +125,45 @@ Una vez que la aplicación esté corriendo, puedes usar estas consultas como eje
     * `Ayuda`
     * `¿Qué puedes hacer?`
 
-* **Finanzas Corporativas (VAN, WACC):**
+* **Finanzas Corporativas (5 herramientas):**
     * `Calcula el VAN de un proyecto. Inversión inicial 100,000. Flujos [30k, 40k, 50k] a 3 años. Tasa de descuento 10%.`
     * `Necesito calcular el WACC. Ke=12%, Kd=8%, E=60M, D=40M, y tasa impositiva 25%.`
+    * `Calcula la TIR: inversión 100k, flujos [30k, 40k, 50k].`
+    * `¿Cuál es el Payback Period? Inversión 50k, flujos [15k, 20k, 25k].`
+    * `Calcula el Profitability Index con tasa 10%, inversión 80k, flujos [30k, 40k, 35k].`
 
-* **Renta Fija (Bonos):**
+* **Renta Fija (6 herramientas):**
     * `Precio de un bono: nominal 1,000, cupón 5% anual, 10 años, YTM 6%.`
+    * `Calcula la Duration Macaulay: nominal 1000, cupón 6%, YTM 7%, 5 años, frecuencia semestral.`
+    * `Duration Modificada con Macaulay Duration de 4.5 años, YTM 6%, frecuencia 2.`
+    * `Calcula Convexity: nominal 1000, cupón 5%, YTM 6%, 10 años, semestral.`
+    * `Current Yield: cupón anual $60, precio actual $950.`
+    * `Valor de bono cupón cero: nominal 1000, YTM 5%, 10 años.`
 
-* **Portafolio (CAPM, Sharpe):**
+* **Portafolio (7 herramientas):**
     * `¿Cuál es el costo de equity (Ke) usando CAPM? La tasa libre de riesgo es 3%, el beta es 1.2 y el retorno de mercado es 10%.`
     * `Calcula el Ratio de Sharpe. Retorno 15%, tasa libre de riesgo 4%, volatilidad 20%.`
+    * `Treynor Ratio: retorno portafolio 12%, tasa libre riesgo 3%, beta 1.3.`
+    * `Jensen's Alpha: retorno 14%, rf 4%, beta 1.1, retorno mercado 12%.`
+    * `Beta de portafolio con 2 activos: pesos 0.6 y 0.4, betas 1.2 y 0.8.`
+    * `Retorno esperado: pesos 0.7 y 0.3, retornos 10% y 15%.`
+    * `Desviación estándar portafolio: pesos 0.5 y 0.5, std dev 20% y 25%, correlación 0.3.`
 
-* **Equity (Gordon Growth):**
+* **Equity (1 herramienta):**
     * `Valora una acción con Gordon Growth. El dividendo esperado (D1) es $2.50, el costo de equity (Ke) es 12%, y la tasa de crecimiento (g) es 4%.`
 
-* **Derivados (Opciones Call):**
+* **Derivados (3 herramientas):**
     * `Precio de opción call: S=100, K=105, T=0.5 años, r=5%, sigma=20%.`
+    * `Precio de opción put: S=50, K=55, T=1 año, r=4%, sigma=30%.`
+    * `Verifica Put-Call Parity: call=$5, put=$3, spot=$100, strike=$100, T=1, r=5%.`
 
-### Consultas a Documentación CFA (RAG)
+### Consultas a Material de Estudio (RAG)
 
-* `¿Qué dice el material CFA sobre el WACC?`
-* `Explica el concepto de Duration según el CFA`
-* `Busca información sobre el modelo Gordon Growth en el CFA`
-* `¿Qué es el Beta según la documentación CFA?`
+* `¿Qué dice el material sobre el WACC?`
+* `Explica el concepto de Duration`
+* `Busca información sobre el modelo Gordon Growth`
+* `¿Qué es el Beta?`
+* `Explícame el concepto de Convexity`
 
 ## 🚀 Getting Started (Localmente)
 
@@ -202,13 +221,13 @@ Sigue estos pasos para ejecutar la aplicación en tu máquina local.
         ```
     * **IMPORTANTE:** Asegúrate de que el archivo `.env` esté listado en tu `.gitignore` para no subirlo accidentamente a GitHub.
 
-5.  **(Opcional) Indexar Documentación CFA en Elasticsearch:**
-    * Si tienes material CFA para indexar:
+5.  **(Opcional) Indexar Material Financiero en Elasticsearch:**
+    * Si tienes material financiero para indexar:
     ```bash
     # Crear directorio para documentos
     mkdir -p data/cfa_books
-    
-    # Copiar tus PDFs ahí
+
+    # Copiar tus PDFs de material financiero ahí
     # Luego ejecutar el indexador (requiere permisos de admin)
     python admin/generate_index.py
     ```
@@ -269,9 +288,9 @@ tu_repositorio/
 │   ├── __init__.py
 │   └── financial_rag_elasticsearch.py  # RAG usando Elasticsearch como vector store
 ├── admin/                  # Scripts de administración
-│   └── generate_index.py   # Indexador de documentos CFA
+│   └── generate_index.py   # Indexador de material financiero
 ├── data/                   # Datos persistentes (no en repo)
-│   └── cfa_books/         # PDFs de material CFA
+│   └── cfa_books/         # PDFs de material financiero
 ├── config.py              # Configuración (LLM, API keys, LangSmith)
 ├── config_elasticsearch.py # Configuración (legacy, no usado actualmente)
 ├── database/              # Conexión a BD (opcional, no usado en MVP)

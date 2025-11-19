@@ -14,11 +14,11 @@ Aquí tienes algunos ejemplos de lo que puedes pedirme:
 * **Gordon:** "Valora una acción con Gordon Growth. D1=$2.50, Ke=12%, g=4%."
 * **Call:** "Precio de opción call: S=100, K=105, T=0.5 años, r=5%, sigma=0.2."
 
-**Consultas Conceptuales (RAG - CFA):**
-* "¿Qué dice el material CFA sobre el WACC?"
-* "Explica el concepto de Duration según el CFA"
-* "Busca información sobre el modelo Gordon Growth en el CFA"
-* "¿Qué es el Beta según la documentación CFA?"
+**Consultas Conceptuales (RAG - Material de Estudio):**
+* "¿Qué es el WACC?"
+* "Explica el concepto de Duration"
+* "Busca información sobre el modelo Gordon Growth"
+* "¿Qué es el Beta?"
 """
 
 @tool
