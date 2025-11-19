@@ -4,7 +4,7 @@ Agentes especializados financieros.
 Actualizado para LangGraph 1.0+ (versión moderna).
 """
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
 from typing import Literal
 from pydantic import BaseModel, Field
@@ -105,18 +105,47 @@ def nodo_sintesis_rag(state: dict) -> dict:
     if not messages:
         logger.error("❌ Estado sin mensajes en nodo Síntesis")
         return {"messages": [AIMessage(content="Error: No hay mensajes en el estado.")]}
-    
+
     try:
-        # 1. Bindea el LLM con el prompt de síntesis
-        llm_sintesis = llm.bind(system=PROMPT_SINTESIS_RAG)
-        
-        # 2. Pasa el historial de mensajes (que incluye la pregunta Y el contexto del RAG)
-        #    al LLM bindeado con el prompt de síntesis.
-        respuesta_sintetizada = llm_sintesis.invoke(messages)
-        
+        # 1. Extraer la pregunta original del usuario (primer HumanMessage)
+        user_question = None
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                user_question = msg.content
+                break
+
+        if not user_question:
+            logger.error("❌ No se encontró pregunta del usuario")
+            return {"messages": [AIMessage(content="Error: No se encontró la pregunta del usuario.")]}
+
+        # 2. Extraer el contexto RAG (último AIMessage antes de este nodo)
+        rag_context = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and not getattr(msg, 'tool_calls', []):
+                rag_context = msg.content
+                break
+
+        if not rag_context:
+            logger.error("❌ No se encontró contexto RAG")
+            return {"messages": [AIMessage(content="Error: No se encontró contexto del RAG.")]}
+
+        # 3. Crear prompt personalizado con el contexto embebido
+        synthesis_prompt = f"""{PROMPT_SINTESIS_RAG}
+
+**CONTEXTO DE DOCUMENTOS CFA:**
+{rag_context}
+
+**PREGUNTA DEL USUARIO:**
+{user_question}
+
+**TU RESPUESTA (solo la síntesis, NO incluyas el contexto crudo):**"""
+
+        # 4. Invocar el LLM solo con el prompt personalizado
+        respuesta_sintetizada = llm.invoke(synthesis_prompt)
+
         logger.info("✅ Respuesta RAG sintetizada")
         return {
-            "messages": [respuesta_sintetizada] # La salida de invoke es una AIMessage
+            "messages": [respuesta_sintetizada]
         }
     except Exception as e:
         logger.error(f"❌ Error en nodo_sintesis_rag: {e}", exc_info=True)
@@ -165,21 +194,24 @@ PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor de nivel C
 Sintetizar el contexto de los documentos CFA para responder la pregunta del usuario.
 
 **REGLAS ABSOLUTAS:**
-1. Lee el contexto proporcionado por el Agente_RAG
-2. Genera una respuesta CON TUS PROPIAS PALABRAS (no copies y pegues)
+1. Lee SOLO el contexto proporcionado en la sección "CONTEXTO DE DOCUMENTOS CFA"
+2. Genera una respuesta COMPLETAMENTE CON TUS PROPIAS PALABRAS (parafrasea, NO copies y pegues)
 3. Basa tu respuesta ESTRICTAMENTE en el contexto
 4. Si el contexto es insuficiente → Di: "La información no se encontró en los documentos CFA disponibles"
 5. SIEMPRE cita tus fuentes al final (usa los metadatos del contexto)
 
 **FORMATO DE RESPUESTA:**
-[Tu síntesis profesional aquí, 2-3 párrafos máximo]
+**Síntesis de [Tema]:**
 
----
+[Tu síntesis profesional aquí, 2-3 párrafos máximo redactados completamente con tus propias palabras]
+
 **Fuentes:**
 - [Fuente 1 con página]
 - [Fuente 2 con página]
 
-**IMPORTANTE:**
+**PROHIBIDO:**
+- NO incluyas el texto crudo de los fragmentos del contexto
+- NO copies literalmente del contexto
 - NO inventes información
 - NO uses tu conocimiento general del LLM
 - Sé conciso y profesional
