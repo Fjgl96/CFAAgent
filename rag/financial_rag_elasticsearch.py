@@ -199,12 +199,71 @@ rag_system = FinancialRAGElasticsearch()
 
 
 # ========================================
-# TOOL PARA EL AGENTE
+# DICCIONARIO DE TÉRMINOS TÉCNICOS (ESPAÑOL ↔ INGLÉS)
 # ========================================
 
+TERMINOS_TECNICOS = {
+    # Términos clave que deben buscarse en ambos idiomas
+    "wacc": ["WACC", "Weighted Average Cost of Capital", "costo promedio ponderado", "costo de capital"],
+    "capm": ["CAPM", "Capital Asset Pricing Model", "modelo de valoración de activos"],
+    "van": ["NPV", "VAN", "Net Present Value", "Valor Actual Neto", "valor presente neto"],
+    "tir": ["IRR", "TIR", "Internal Rate of Return", "tasa interna de retorno"],
+    "beta": ["beta", "systematic risk", "riesgo sistemático"],
+    "sharpe": ["Sharpe ratio", "ratio de Sharpe", "rendimiento ajustado por riesgo"],
+    "bono": ["bond", "bono", "fixed income", "renta fija"],
+    "cupón": ["coupon", "cupón"],
+    "ytm": ["YTM", "yield to maturity", "rendimiento al vencimiento"],
+    "duration": ["duration", "duración", "modified duration"],
+    "convexity": ["convexity", "convexidad"],
+    "equity": ["equity", "acciones", "stock", "patrimonio"],
+    "dividend": ["dividend", "dividendo"],
+    "gordon": ["Gordon Growth", "modelo de Gordon", "dividend discount model", "DDM"],
+    "derivado": ["derivative", "derivado", "option", "opción"],
+    "call": ["call option", "opción call"],
+    "put": ["put option", "opción put"],
+    "black-scholes": ["Black-Scholes", "Black Scholes"],
+    "volatilidad": ["volatility", "volatilidad"],
+    "portfolio": ["portfolio", "portafolio", "cartera"],
+    "diversificación": ["diversification", "diversificación"],
+    "riesgo": ["risk", "riesgo"],
+    "retorno": ["return", "retorno", "rendimiento"],
+}
+
+def enriquecer_query_bilingue(consulta: str) -> str:
+    """
+    Enriquece la consulta agregando términos técnicos en inglés si se detectan en español.
+
+    Args:
+        consulta: Query original del usuario (probablemente en español)
+
+    Returns:
+        Query enriquecida con términos bilingües
+    """
+    consulta_lower = consulta.lower()
+    terminos_agregados = []
+
+    # Buscar términos técnicos en la query
+    for key, synonyms in TERMINOS_TECNICOS.items():
+        # Si encontramos algún término relacionado en la query
+        if any(term.lower() in consulta_lower for term in synonyms):
+            # Agregar todos los sinónimos para mejorar la búsqueda
+            terminos_agregados.extend(synonyms)
+
+    # Si encontramos términos técnicos, enriquecer la query
+    if terminos_agregados:
+        # Eliminar duplicados manteniendo orden
+        terminos_unicos = list(dict.fromkeys(terminos_agregados))
+        terminos_str = " ".join(terminos_unicos)
+        query_enriquecida = f"{consulta} {terminos_str}"
+        print(f"🔄 Query enriquecida: '{consulta}' → agregados {len(terminos_unicos)} términos")
+        return query_enriquecida
+
+    return consulta
 
 
-
+# ========================================
+# TOOL PARA EL AGENTE
+# ========================================
 
 @tool
 def buscar_documentacion_financiera(consulta: str) -> str:
@@ -218,9 +277,12 @@ def buscar_documentacion_financiera(consulta: str) -> str:
         Contexto relevante de la documentación.
     """
     print(f"\n🔍 RAG Tool invocado con consulta: '{consulta}'")
-    
-    # Buscar documentos relevantes
-    docs = rag_system.search_documents(consulta, k=3)
+
+    # MEJORA: Enriquecer query con términos bilingües
+    consulta_enriquecida = enriquecer_query_bilingue(consulta)
+
+    # Buscar documentos relevantes con query enriquecida
+    docs = rag_system.search_documents(consulta_enriquecida, k=3)
     
     if not docs:
         return (
