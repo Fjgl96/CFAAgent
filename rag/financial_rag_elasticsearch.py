@@ -144,47 +144,78 @@ class FinancialRAGElasticsearch:
         self,
         query: str,
         k: int = None,
-        filter_dict: dict = None
+        filter_dict: dict = None,
+        min_score: float = None
     ) -> List[Document]:
         """
-        Busca documentos similares a la query en Elasticsearch.
-        
+        Busca documentos similares a la query en Elasticsearch con filtro opcional de relevancia.
+
         Args:
             query: Consulta de búsqueda
             k: Número de documentos a retornar
             filter_dict: Filtros de metadata (ej: {"cfa_level": "I"})
-        
+            min_score: Score mínimo de similitud (0-1). Filtra resultados poco relevantes.
+
         Returns:
             Lista de documentos relevantes
         """
         if k is None:
             k = self.k_results
-        
+
         # Verificar que esté conectado
         if self.vector_store is None:
             print("⚠️ No conectado a Elasticsearch. Intentando reconectar...")
             if not self._connect():
                 return []
-        
-        print(f"🔍 Buscando en Elasticsearch con OpenAI: '{query}' (top {k})")
-        
+
+        print(f"🔍 Buscando en Elasticsearch con OpenAI: '{query}' (top {k}, min_score: {min_score})")
+
         try:
-            # Búsqueda semántica con similarity_search
-            if filter_dict:
-                results = self.vector_store.similarity_search(
-                    query=query,
-                    k=k,
-                    filter=filter_dict
-                )
+            # Si necesitamos filtrar por score, usamos similarity_search_with_score
+            if min_score is not None:
+                # Buscar con scores
+                if filter_dict:
+                    results_with_scores = self.vector_store.similarity_search_with_score(
+                        query=query,
+                        k=k * 2,  # Buscar más para luego filtrar
+                        filter=filter_dict
+                    )
+                else:
+                    results_with_scores = self.vector_store.similarity_search_with_score(
+                        query=query,
+                        k=k * 2
+                    )
+
+                # Filtrar por score mínimo
+                # NOTA: En Elasticsearch, scores más BAJOS = más similares (distancia)
+                # Convertimos a similitud normalizada: score_norm = 1 / (1 + distance)
+                filtered_results = []
+                for doc, score in results_with_scores:
+                    # Normalizar score (distancia) a similitud
+                    similarity = 1 / (1 + score)
+                    if similarity >= min_score:
+                        filtered_results.append(doc)
+
+                results = filtered_results[:k]  # Tomar solo top-k después de filtrar
+                print(f"✅ {len(results)} documentos encontrados (filtrados por relevancia >= {min_score})")
             else:
-                results = self.vector_store.similarity_search(
-                    query=query,
-                    k=k
-                )
-            
-            print(f"✅ {len(results)} documentos encontrados")
+                # Búsqueda semántica normal sin filtro de score
+                if filter_dict:
+                    results = self.vector_store.similarity_search(
+                        query=query,
+                        k=k,
+                        filter=filter_dict
+                    )
+                else:
+                    results = self.vector_store.similarity_search(
+                        query=query,
+                        k=k
+                    )
+
+                print(f"✅ {len(results)} documentos encontrados")
+
             return results
-        
+
         except Exception as e:
             print(f"❌ Error en búsqueda: {e}")
             return []
@@ -298,7 +329,12 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     consulta_enriquecida = enriquecer_query_bilingue(consulta)
 
     # Buscar documentos relevantes con query enriquecida
-    docs = rag_system.search_documents(consulta_enriquecida, k=3)
+    # OPTIMIZACIÓN: k=5 para tener más opciones, min_score=0.5 para filtrar resultados poco relevantes
+    docs = rag_system.search_documents(
+        consulta_enriquecida,
+        k=5,
+        min_score=0.5  # Filtro de relevancia: solo documentos con similitud >= 0.5
+    )
     
     if not docs:
         return (
