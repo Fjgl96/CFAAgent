@@ -118,14 +118,23 @@ class FinancialRAGElasticsearch:
     def get_health_status(self) -> dict:
         """
         Retorna el estado de salud del sistema RAG.
-        
-        Returns:
-            Diccionario con métricas de estado
+        Determina el estado basado en el vector_store existente.
         """
+        # Inferir estado actual
+        is_connected = (
+            self.vector_store is not None and
+            self.embeddings is not None
+        )
+        
+        # Inferir último error chequeando si _connect() falló
+        error_msg = None
+        if not is_connected:
+            error_msg = "RAG no inicializado o conexión fallida"
+        
         return {
-            "connection_status": self.connection_status,
-            "last_error": self.last_error,
-            "retry_count": self.retry_count,
+            "connection_status": "connected" if is_connected else "disconnected",
+            "last_error": error_msg,
+            "retry_count": 0,  # No es crítico, solo para compatibilidad
             "index_name": self.index_name,
             "embeddings_loaded": self.embeddings is not None,
             "vector_store_ready": self.vector_store is not None

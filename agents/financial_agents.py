@@ -4,7 +4,7 @@ Agentes especializados financieros.
 Actualizado para LangGraph 1.0+ (versión moderna).
 """
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
 from typing import Literal
 from pydantic import BaseModel, Field
@@ -105,18 +105,78 @@ def nodo_sintesis_rag(state: dict) -> dict:
     if not messages:
         logger.error("❌ Estado sin mensajes en nodo Síntesis")
         return {"messages": [AIMessage(content="Error: No hay mensajes en el estado.")]}
-    
+
     try:
-        # 1. Bindea el LLM con el prompt de síntesis
+        # 1. Extraer la pregunta original del usuario
+        user_question = None
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                user_question = msg.content
+                break
+
+        if not user_question:
+            logger.error("❌ No se encontró pregunta del usuario")
+            return {"messages": [AIMessage(content="Error: No se encontró la pregunta del usuario.")]}
+
+        # 2. Extraer el contexto RAG
+        rag_context = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and not getattr(msg, 'tool_calls', []):
+                rag_context = msg.content
+                break
+
+        if not rag_context:
+            logger.error("❌ No se encontró contexto RAG")
+            return {"messages": [AIMessage(content="Error: No se encontró contexto del RAG.")]}
+
+        # 3. Bindear LLM con system prompt
         llm_sintesis = llm.bind(system=PROMPT_SINTESIS_RAG)
         
-        # 2. Pasa el historial de mensajes (que incluye la pregunta Y el contexto del RAG)
-        #    al LLM bindeado con el prompt de síntesis.
-        respuesta_sintetizada = llm_sintesis.invoke(messages)
+        # 4. Crear mensaje de usuario limpio
+        user_prompt = f"""**CONTEXTO DE DOCUMENTOS CFA:**
+        {rag_context}
+
+        **PREGUNTA DEL USUARIO:**
+        {user_question}
+
+        Genera SOLO tu síntesis profesional. NO incluyas ningún fragmento del contexto crudo."""
+
+        # 5. Invocar el LLM
+        respuesta_sintetizada = llm_sintesis.invoke(user_prompt)
         
-        logger.info("✅ Respuesta RAG sintetizada")
+        # 6. POST-PROCESAMIENTO: Limpiar respuesta
+        respuesta_content = respuesta_sintetizada.content if hasattr(respuesta_sintetizada, 'content') else str(respuesta_sintetizada)
+        
+        # Buscar el marcador "**Síntesis de" o similar
+        # Si la respuesta empieza con fragmentos del RAG, intentar encontrar donde comienza la síntesis real
+        if "**Síntesis" in respuesta_content:
+            # Tomar solo desde el marcador de síntesis en adelante
+            inicio_sintesis = respuesta_content.find("**Síntesis")
+            respuesta_limpia = respuesta_content[inicio_sintesis:].strip()
+        elif "**Fuentes:" in respuesta_content:
+            # Si tiene fuentes pero no el marcador de síntesis, buscar el primer párrafo coherente
+            lineas = respuesta_content.split('\n')
+            lineas_limpias = []
+            encontrado_inicio = False
+            for linea in lineas:
+                # Saltar líneas que parecen fragmentos del RAG
+                if linea.strip().startswith('---') or linea.strip().startswith('Fuente:') or linea.strip().startswith('CFA Level:') or linea.strip().startswith('Contenido:'):
+                    continue
+                # Si la línea empieza con texto coherente en español o con **
+                if linea.strip() and (linea.strip().startswith('**') or linea.strip()[0].isupper()):
+                    encontrado_inicio = True
+                if encontrado_inicio:
+                    lineas_limpias.append(linea)
+            respuesta_limpia = '\n'.join(lineas_limpias).strip()
+        else:
+            respuesta_limpia = respuesta_content.strip()
+        
+        # Crear AIMessage con contenido limpio
+        mensaje_final = AIMessage(content=respuesta_limpia)
+        
+        logger.info("✅ Respuesta RAG sintetizada y limpiada")
         return {
-            "messages": [respuesta_sintetizada] # La salida de invoke es una AIMessage
+            "messages": [mensaje_final]
         }
     except Exception as e:
         logger.error(f"❌ Error en nodo_sintesis_rag: {e}", exc_info=True)
@@ -165,26 +225,36 @@ PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor de nivel C
 Sintetizar el contexto de los documentos CFA para responder la pregunta del usuario.
 
 **REGLAS ABSOLUTAS:**
-1. Lee el contexto proporcionado por el Agente_RAG
-2. Genera una respuesta CON TUS PROPIAS PALABRAS (no copies y pegues)
+1. Lee SOLO el contexto proporcionado en la sección "CONTEXTO DE DOCUMENTOS CFA"
+2. Genera una respuesta COMPLETAMENTE CON TUS PROPIAS PALABRAS (parafrasea, NO copies y pegues)
 3. Basa tu respuesta ESTRICTAMENTE en el contexto
 4. Si el contexto es insuficiente → Di: "La información no se encontró en los documentos CFA disponibles"
 5. SIEMPRE cita tus fuentes al final (usa los metadatos del contexto)
 
+**MANEJO DE CONTRADICCIONES:**
+Si los fragmentos del RAG se contradicen:
+1. Menciona que existen diferentes perspectivas
+2. Prioriza: CFA Level III > Level II > Level I (más avanzado = más detallado)
+3. Indica claramente qué fuente dice qué
+4. Ejemplo: "Según el material de Level I [fuente], X se define como Y. Sin embargo,
+   el Level III [fuente] profundiza explicando que..."
+
 **FORMATO DE RESPUESTA:**
-[Tu síntesis profesional aquí, 2-3 párrafos máximo]
+**Síntesis de [Tema]:**
 
----
+[Tu síntesis profesional aquí, 2-3 párrafos máximo redactados completamente con tus propias palabras]
+
 **Fuentes:**
-- [Fuente 1 con página]
-- [Fuente 2 con página]
+- [Fuente 1 con página y nivel]
+- [Fuente 2 con página y nivel]
 
-**IMPORTANTE:**
+**PROHIBIDO:**
+- NO incluyas el texto crudo de los fragmentos del contexto
+- NO copies literalmente del contexto
 - NO inventes información
 - NO uses tu conocimiento general del LLM
 - Sé conciso y profesional
 """
-
 
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija con UNA única herramienta: 'calcular_valor_bono'.
 
@@ -457,8 +527,10 @@ SI ES SÍ → Elige 'Agente_RAG'
 SI ES SÍ → Elige el agente especialista apropiado
 
 **6. REGLA ANTI-LOOP:**
-¿Vas a elegir el mismo agente que ejecutó en el mensaje anterior Y el usuario NO agregó nueva información?
-SI ES SÍ → Elige 'FINISH' (evitar bucles)
+¿Vas a elegir el mismo agente que ejecutó en el mensaje anterior?
+- SI completó exitosamente ("Tarea completada") → 'FINISH'
+- SI falló por parámetros faltantes Y usuario NO agregó info → 'FINISH'  
+- SI falló PERO ahora hay nueva info del usuario → Reenvía al agente
 
 **7. REGLA DE SEGURIDAD:**
 Si ninguna regla aplica o hay duda → Elige 'FINISH'
