@@ -191,25 +191,11 @@ class FinancialRAGElasticsearch:
 
 
 # ========================================
-# INSTANCIA GLOBAL CON LAZY LOADING
+# INSTANCIA GLOBAL
 # ========================================
 
-# Instancia única del sistema RAG (lazy loading)
-_rag_system = None
-
-def get_rag_system() -> FinancialRAGElasticsearch:
-    """
-    Obtiene la instancia del sistema RAG (lazy loading).
-    Solo se conecta a Elasticsearch cuando se necesita por primera vez.
-
-    Returns:
-        Instancia de FinancialRAGElasticsearch
-    """
-    global _rag_system
-    if _rag_system is None:
-        print("🔄 Inicializando sistema RAG (primera vez)...")
-        _rag_system = FinancialRAGElasticsearch()
-    return _rag_system
+# Instancia única del sistema RAG
+rag_system = FinancialRAGElasticsearch()
 
 
 # ========================================
@@ -311,11 +297,8 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     # MEJORA: Enriquecer query con términos bilingües
     consulta_enriquecida = enriquecer_query_bilingue(consulta)
 
-    # Obtener sistema RAG (lazy loading - solo se conecta cuando se necesita)
-    rag = get_rag_system()
-
     # Buscar documentos relevantes con query enriquecida
-    docs = rag.search_documents(consulta_enriquecida, k=3)
+    docs = rag_system.search_documents(consulta_enriquecida, k=3)
     
     if not docs:
         return (
