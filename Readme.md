@@ -185,6 +185,21 @@ Este es un **proyecto académico y experimental** desarrollado para investigaci�
 
 **CFA®** y **Chartered Financial Analyst®** son marcas registradas del CFA Institute. Este proyecto no tiene ninguna afiliación con el CFA Institute.
 
+### 🔒 Protecciones Técnicas de Copyright
+
+El sistema implementa **múltiples capas de protección** para evitar reproducción inadvertida de contenido protegido:
+
+**✅ Implementado:**
+- **Guardrails Semánticos:** Clasificador que intercepta queries riesgosas (transcripciones, copias literales, solicitudes de capítulos completos)
+- **Prompts Anti-Reproducción:** El agente RAG opera como "tutor conceptual" que genera explicaciones originales, NO como motor de recuperación documental
+- **Prohibiciones explícitas:** Referencias bibliográficas específicas deshabilitadas, ejemplos numéricos generados por el sistema
+
+**⚠️ Limitaciones arquitecturales:**
+- El sistema RAG actual usa fragmentos textuales (no embeddings abstractos)
+- Para máxima protección, se recomienda configuración BYOD con material adquirido legalmente
+
+📄 **Documentación técnica completa:** Ver `/docs/COPYRIGHT_PROTECTION.md` para análisis detallado de las 4 capas de protección.
+
 ---
 
 ## 🚀 Getting Started (Localmente)

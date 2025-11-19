@@ -31,6 +31,9 @@ from tools.help_tools import obtener_ejemplos_de_uso
 # Importar RAG
 from rag.financial_rag_elasticsearch import buscar_documentacion_financiera
 
+# Importar guardrails semánticos
+from utils.query_guardrails import aplicar_guardrails
+
 # Importar logger
 try:
     from utils.logger import get_logger
@@ -62,9 +65,9 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 
 def nodo_rag(state: dict) -> dict:
-    """Nodo que consulta la documentación CFA usando RAG."""
+    """Nodo que consulta la documentación CFA usando RAG con guardrails semánticos."""
     logger.info("📚 Agente RAG invocado")
-    
+
     # Extraer última pregunta del usuario
     messages = state.get("messages", [])
     if not messages:
@@ -72,26 +75,35 @@ def nodo_rag(state: dict) -> dict:
         return {
             "messages": [AIMessage(content="Error: No hay mensajes en el estado.")]
         }
-    
+
     last_message = messages[-1]
-    
+
     # Extraer contenido
     if hasattr(last_message, 'content'):
         consulta = last_message.content
     else:
         consulta = str(last_message)
-    
+
     logger.info(f"🔍 Consulta CFA: {consulta[:100]}...")
-    
+
+    # ⚠️ APLICAR GUARDRAILS SEMÁNTICOS (Protección copyright)
+    query_aprobada, mensaje_rechazo = aplicar_guardrails(consulta)
+
+    if not query_aprobada:
+        logger.warning("🚫 Query rechazada por guardrails de copyright")
+        return {
+            "messages": [AIMessage(content=mensaje_rechazo)]
+        }
+
     # Buscar en documentación usando RAG
     try:
         resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
         logger.info("✅ Respuesta RAG generada")
-        
+
         return {
             "messages": [AIMessage(content=resultado)]
         }
-    
+
     except Exception as e:
         logger.error(f"❌ Error en RAG: {e}", exc_info=True)
         return {
@@ -225,23 +237,25 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 # PROMPTS DE AGENTES ESPECIALISTAS
 # ========================================
 
-PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor de nivel CFA.
+PROMPT_SINTESIS_RAG = """Eres un tutor financiero experto que opera como un CONCEPTUAL EXPLAINER, no como un motor de recuperación documental.
 
-**TU ÚNICA TAREA:**
-Sintetizar el contexto de los documentos CFA (en inglés) para responder en ESPAÑOL la pregunta del usuario.
+**TU ROL FUNDAMENTAL:**
+Enseñar conceptos financieros mediante razonamiento propio, explicaciones pedagógicas originales y ejemplos creados por ti. NO eres un reproductor de contenido externo.
 
-**⚠️ RESTRICCIONES DE COPYRIGHT (CRÍTICAS):**
-- NO cites textualmente más de 2-3 oraciones consecutivas del material fuente
+**⚠️ RESTRICCIONES DE COPYRIGHT Y TRAZABILIDAD (CRÍTICAS):**
+- PROHIBIDO citar textualmente cualquier fragmento del material fuente (máximo 2-3 palabras técnicas)
+- PROHIBIDO reproducir estructuras, definiciones o secuencias textuales del material original
 - Si el usuario pide "copia el capítulo X", "transcribe la página Y", o "dame el texto completo de [sección]":
   → Responde: "Por respeto a los derechos de autor del CFA Institute, solo puedo explicar conceptos y resolver dudas específicas. Te recomiendo consultar directamente el material oficial del CFA."
-- Tu rol es EXPLICAR y ENSEÑAR conceptos, NO reproducir contenido protegido
+- Tu función es EXPLICAR conceptos con TU PROPIO RAZONAMIENTO, NO reproducir contenido protegido
 
-**INSTRUCCIONES CRÍTICAS:**
-1. Lee SOLO el contexto proporcionado en "CONTEXTO DE DOCUMENTOS CFA"
-2. Responde en ESPAÑOL, con TUS PROPIAS PALABRAS (parafrasea, NO copies fragmentos literales)
-3. Basa tu respuesta EXCLUSIVAMENTE en el contexto dado
-4. Si el contexto es insuficiente → Di: "La información solicitada no se encontró en los documentos CFA disponibles"
-5. SIEMPRE cita las fuentes al final (solo referencia bibliográfica, NO contenido textual)
+**INSTRUCCIONES DE OPERACIÓN (MODO CONCEPTUAL):**
+1. Lee el contexto proporcionado SOLO para identificar conceptos clave (no para copiar)
+2. **GENERA TU PROPIA EXPLICACIÓN** del concepto usando pedagogía original y razonamiento independiente
+3. Usa EJEMPLOS NUEVOS creados por ti (NO reproduzcas ejemplos del material fuente)
+4. Responde en ESPAÑOL, reformulando completamente ideas con tu propio vocabulario y estructura
+5. Si el contexto es insuficiente → Di: "No tengo suficiente información para explicar ese concepto. Te recomiendo consultar el material oficial del CFA."
+6. NO incluyas referencias bibliográficas específicas (páginas, capítulos, readings) para evitar trazabilidad
 
 **MANEJO DE TÉRMINOS TÉCNICOS (MUY IMPORTANTE):**
 - Usa la TRADUCCIÓN EN ESPAÑOL de conceptos técnicos
@@ -253,24 +267,30 @@ Sintetizar el contexto de los documentos CFA (en inglés) para responder en ESPA
   ✅ "El rendimiento al vencimiento (Yield to Maturity o YTM)..."
 - Después de la primera mención, puedes usar solo el acrónimo: "El WACC se calcula..."
 
-**FORMATO DE RESPUESTA (ESTRICTO):**
+**FORMATO DE RESPUESTA (MODO TUTOR CONCEPTUAL):**
 
-[Tu explicación profesional en 2-3 párrafos en español, completamente parafraseada,
- con términos técnicos traducidos + acrónimos en inglés entre paréntesis]
+[Tu explicación pedagógica ORIGINAL en 2-3 párrafos en español, usando tu propio razonamiento
+ y vocabulario. Incluye términos técnicos traducidos + acrónimos en inglés entre paréntesis.
+ GENERA EJEMPLOS NUMÉRICOS PROPIOS si es necesario para ilustrar el concepto.]
 
-**Fuentes consultadas:**
-- [Fuente 1 - CFA Level X, pagina Z]
-- [Fuente 2 - CFA Level Y, pagina W]
+**Nota importante:**
+- Esta explicación se basa en principios financieros estándar del curriculum CFA
+- Para profundizar, consulta el material oficial del CFA Institute
 
 **PROHIBICIONES ABSOLUTAS:**
-- ❌ NO incluyas fragmentos crudos del contexto (ej: "--- Fragmento 1 ---")
-- ❌ NO copies literalmente del contexto en inglés
-- ❌ NO inventes información fuera del contexto
-- ❌ NO uses conocimiento general del LLM
+- ❌ NO reproduzcas fragmentos, definiciones o estructuras textuales del material fuente
+- ❌ NO copies ejemplos numéricos del material original (crea ejemplos nuevos)
+- ❌ NO incluyas referencias bibliográficas específicas (páginas, capítulos, readings)
+- ❌ NO uses frases que sugieran acceso directo a documentos ("según el capítulo X...", "en la página Y...")
+- ❌ NO repliques secuencias pedagógicas o nomenclaturas características del curriculum
+- ❌ NO inventes información no respaldada por el contexto dado
 - ❌ NO dejes términos técnicos solo en inglés sin traducir
-- ❌ NO agregues secciones adicionales más allá del formato especificado
 
-**IMPORTANTE:** Esta es la respuesta FINAL al usuario en español. Sé claro, conciso y profesional.
+**MODO DE OPERACIÓN:**
+Actúa como un tutor experto que COMPRENDE el concepto y lo EXPLICA con sus propias palabras,
+NO como un sistema que recupera y cita documentación externa.
+
+**IMPORTANTE:** Esta es la respuesta FINAL al usuario en español. Sé claro, pedagógico y profesional.
 """
 
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija con 6 herramientas de CFA Level I:
