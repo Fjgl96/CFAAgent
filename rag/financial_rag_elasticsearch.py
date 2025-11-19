@@ -3,8 +3,8 @@
 Sistema RAG - VERSIÓN ELASTICSEARCH CON OPENAI EMBEDDINGS
 Actualizado para LangChain 1.0+
 
-Los usuarios consultan el índice de Elasticsearch.
-El admin indexa con generate_index.py
+Los usuarios consultan material financiero indexado en Elasticsearch.
+El admin indexa documentos con generate_index.py
 """
 
 from typing import List
@@ -284,13 +284,13 @@ def enriquecer_query_bilingue(consulta: str) -> str:
 @tool
 def buscar_documentacion_financiera(consulta: str) -> str:
     """
-    Busca información en la documentación financiera CFA indexada en Elasticsearch.
-    
+    Busca información en material financiero indexado en Elasticsearch.
+
     Args:
         consulta: La pregunta o tema a buscar.
-    
+
     Returns:
-        Contexto relevante de la documentación.
+        Contexto relevante del material de estudio.
     """
     print(f"\n🔍 RAG Tool invocado con consulta: '{consulta}'")
 
@@ -302,7 +302,7 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     
     if not docs:
         return (
-            "No encontré información relevante en la documentación indexada. "
+            "No encontré información relevante en el material de estudio indexado. "
             "Esto puede deberse a:\n"
             "1. El tema no está en el material indexado\n"
             "2. El índice no se ha generado aún en Elasticsearch\n"
@@ -336,8 +336,8 @@ def buscar_documentacion_financiera(consulta: str) -> str:
         )
     
     full_context = "\n\n".join(context_parts)
-    
-    return f"📚 Información encontrada en la documentación CFA:\n\n{full_context}"
+
+    return f"📚 Información encontrada en el material de estudio:\n\n{full_context}"
 
 
 print("✅ Módulo financial_rag_elasticsearch cargado (LangChain 1.0, OpenAI Embeddings).")

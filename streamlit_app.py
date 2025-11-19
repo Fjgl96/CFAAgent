@@ -110,8 +110,8 @@ def verify_system_health():
     try:
         from tools.financial_tools import financial_tool_list
         tool_count = len(financial_tool_list)
-        health_status["tools"]["status"] = tool_count == 7
-        health_status["tools"]["details"] = f"{tool_count}/7 herramientas"
+        health_status["tools"]["status"] = tool_count == 22
+        health_status["tools"]["details"] = f"{tool_count}/22 herramientas"
         logger.info(f"✅ Tools cargados: {tool_count}")
     except Exception as e:
         health_status["tools"]["details"] = str(e)
@@ -139,8 +139,8 @@ import os
 # HEADER Y STATUS
 # ========================================
 
-st.title("Compañero de estudio")
-st.caption("Con LangGraph, LLM y  RAG (Elasticsearch)")
+st.title("Compañero de estudio financiero")
+st.caption("Con LangGraph, Claude 3.5 Haiku y RAG (Elasticsearch)")
 
 # Mostrar LangSmith status
 if LANGSMITH_ENABLED:
@@ -205,16 +205,17 @@ with st.sidebar:
 # ========================================
 
 st.markdown("""
-Esta es una calculadora financiera inteligente con acceso a documentación CFA. Puedes:
+Esta es una calculadora financiera inteligente con acceso a material de estudio. Puedes:
 
-**📊 Realizar cálculos:**
-- Valor Actual Neto (VAN)
-- Costo Promedio Ponderado de Capital (WACC)
-- Valoración de Bonos
-- CAPM, Sharpe Ratio, Gordon Growth, Opciones Call
+**📊 Realizar cálculos financieros (22 herramientas CFA Level I):**
+- **Renta Fija:** Valoración de Bonos, Duration, Convexity, Current Yield
+- **Finanzas Corporativas:** VAN, WACC, TIR, Payback Period, Profitability Index
+- **Portafolio:** CAPM, Sharpe/Treynor/Jensen, Beta, Retorno, Desviación Estándar
+- **Equity:** Gordon Growth Model
+- **Derivados:** Opciones Call/Put (Black-Scholes), Put-Call Parity
 
-**📚 Consultar documentación CFA:**
-- "¿Qué dice el CFA sobre el WACC?"
+**📚 Consultar material de estudio financiero:**
+- "¿Qué es el WACC?"
 - "Explica el concepto de Duration"
 - "Busca información sobre el modelo Gordon Growth"
 
@@ -230,7 +231,7 @@ st.divider()
 # Inicializar historial
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "¡Hola! ¿Qué cálculo financiero necesitas realizar hoy? También puedo consultar la documentación CFA si tienes preguntas teóricas."}
+        {"role": "assistant", "content": "¡Hola! ¿Qué cálculo financiero necesitas realizar hoy? También puedo consultar material de estudio si tienes preguntas teóricas."}
     ]
     logger.info("💬 Nueva sesión de chat iniciada")
 
