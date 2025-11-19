@@ -187,7 +187,7 @@ with st.sidebar:
     
     # Advertencias si algo falla
     if not health["rag"]["status"]:
-        st.warning("⚠️ **RAG desconectado**\n\nLas consultas conceptuales no estarán disponibles. Los cálculos funcionan normalmente.")
+        st.warning("**Revisar**\n\n")
     
     if not all(h["status"] for h in [health["llm"], health["graph"], health["tools"]]):
         st.error("❌ **Sistema parcialmente funcional**\n\nAlgunos componentes tienen problemas.")
