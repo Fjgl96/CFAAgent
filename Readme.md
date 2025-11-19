@@ -165,6 +165,28 @@ Una vez que la aplicación esté corriendo, puedes usar estas consultas como eje
 * `Explica la diferencia entre Duration Macaulay y Modificada`
 * `¿Qué es Jensen's Alpha y cómo se interpreta?`
 
+## ⚠️ Disclaimer Legal
+
+**Importante: Lee antes de usar este proyecto**
+
+Este es un **proyecto académico y experimental** desarrollado para investigación sobre IA Generativa aplicada a educación financiera.
+
+### Avisos Importantes:
+
+- ❌ **NO está afiliado ni respaldado por el CFA Institute®**
+- ✅ Este proyecto es una **herramienta de estudio complementaria**, NO un sustituto del material oficial
+- 📚 **Responsabilidad del usuario**: Si utilizas la funcionalidad RAG, debes poseer legalmente el material CFA que indexes en tu propia instancia
+- 🔒 **Uso recomendado**: Configurar en modo BYOD (Bring Your Own Documents) para uso personal con material que hayas adquirido legalmente
+- 🎓 **Propósito educativo**: Diseñado para ayudar a comprender conceptos, NO para reproducir contenido protegido por copyright
+
+**Nota sobre derechos de autor:**
+- El sistema está programado para explicar conceptos con sus propias palabras, no para copiar textualmente material del CFA Institute
+- Si el usuario solicita copias literales de contenido protegido, el sistema rechazará la solicitud
+
+**CFA®** y **Chartered Financial Analyst®** son marcas registradas del CFA Institute. Este proyecto no tiene ninguna afiliación con el CFA Institute.
+
+---
+
 ## 🚀 Getting Started (Localmente)
 
 Sigue estos pasos para ejecutar la aplicación en tu máquina local.
