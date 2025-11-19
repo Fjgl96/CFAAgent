@@ -245,8 +245,8 @@ Sintetizar el contexto de los documentos CFA (en inglés) para responder en ESPA
  con términos técnicos traducidos + acrónimos en inglés entre paréntesis]
 
 **Fuentes consultadas:**
-- [Fuente 1 - CFA Level X]
-- [Fuente 2 - CFA Level Y]
+- [Fuente 1 - CFA Level X, pagina Z]
+- [Fuente 2 - CFA Level Y, pagina W]
 
 **PROHIBICIONES ABSOLUTAS:**
 - ❌ NO incluyas fragmentos crudos del contexto (ej: "--- Fragmento 1 ---")
