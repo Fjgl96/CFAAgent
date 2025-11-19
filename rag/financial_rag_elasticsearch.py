@@ -203,30 +203,46 @@ rag_system = FinancialRAGElasticsearch()
 # ========================================
 
 TERMINOS_TECNICOS = {
-    # Términos clave que deben buscarse en ambos idiomas
+    # ===== FINANZAS CORPORATIVAS =====
     "wacc": ["WACC", "Weighted Average Cost of Capital", "costo promedio ponderado", "costo de capital"],
-    "capm": ["CAPM", "Capital Asset Pricing Model", "modelo de valoración de activos"],
     "van": ["NPV", "VAN", "Net Present Value", "Valor Actual Neto", "valor presente neto"],
     "tir": ["IRR", "TIR", "Internal Rate of Return", "tasa interna de retorno"],
-    "beta": ["beta", "systematic risk", "riesgo sistemático"],
-    "sharpe": ["Sharpe ratio", "ratio de Sharpe", "rendimiento ajustado por riesgo"],
+    "payback": ["Payback Period", "periodo de recuperación", "payback"],
+    "profitability_index": ["Profitability Index", "PI", "índice de rentabilidad", "índice de beneficio"],
+
+    # ===== RENTA FIJA =====
     "bono": ["bond", "bono", "fixed income", "renta fija"],
     "cupón": ["coupon", "cupón"],
     "ytm": ["YTM", "yield to maturity", "rendimiento al vencimiento"],
-    "duration": ["duration", "duración", "modified duration"],
+    "duration": ["duration", "duración", "Macaulay duration", "modified duration", "duration modificada"],
     "convexity": ["convexity", "convexidad"],
+    "current_yield": ["current yield", "rendimiento corriente", "yield"],
+    "zero_coupon": ["zero-coupon bond", "bono cupón cero", "strip bond"],
+
+    # ===== EQUITY =====
     "equity": ["equity", "acciones", "stock", "patrimonio"],
     "dividend": ["dividend", "dividendo"],
     "gordon": ["Gordon Growth", "modelo de Gordon", "dividend discount model", "DDM"],
+
+    # ===== DERIVADOS =====
     "derivado": ["derivative", "derivado", "option", "opción"],
     "call": ["call option", "opción call"],
     "put": ["put option", "opción put"],
     "black-scholes": ["Black-Scholes", "Black Scholes"],
-    "volatilidad": ["volatility", "volatilidad"],
+    "volatilidad": ["volatility", "volatilidad", "sigma"],
+    "put_call_parity": ["put-call parity", "paridad put-call"],
+
+    # ===== PORTAFOLIO =====
+    "capm": ["CAPM", "Capital Asset Pricing Model", "modelo de valoración de activos"],
+    "beta": ["beta", "systematic risk", "riesgo sistemático"],
+    "sharpe": ["Sharpe ratio", "ratio de Sharpe", "rendimiento ajustado por riesgo"],
+    "treynor": ["Treynor ratio", "ratio de Treynor", "índice de Treynor"],
+    "jensen": ["Jensen's alpha", "Jensen alpha", "alfa de Jensen"],
     "portfolio": ["portfolio", "portafolio", "cartera"],
     "diversificación": ["diversification", "diversificación"],
-    "riesgo": ["risk", "riesgo"],
-    "retorno": ["return", "retorno", "rendimiento"],
+    "correlación": ["correlation", "correlación", "covariance", "covarianza"],
+    "riesgo": ["risk", "riesgo", "standard deviation", "desviación estándar"],
+    "retorno": ["return", "retorno", "rendimiento", "expected return"],
 }
 
 def enriquecer_query_bilingue(consulta: str) -> str:
