@@ -107,9 +107,9 @@ def nodo_sintesis_rag(state: dict) -> dict:
         return {"messages": [AIMessage(content="Error: No hay mensajes en el estado.")]}
 
     try:
-        # 1. Extraer la pregunta original del usuario
+        # 1. Extraer la ÚLTIMA pregunta del usuario (no la primera)
         user_question = None
-        for msg in messages:
+        for msg in reversed(messages):
             if isinstance(msg, HumanMessage):
                 user_question = msg.content
                 break
@@ -143,34 +143,32 @@ def nodo_sintesis_rag(state: dict) -> dict:
 
         # 5. Invocar el LLM
         respuesta_sintetizada = llm_sintesis.invoke(user_prompt)
-        
-        # 6. POST-PROCESAMIENTO: Limpiar respuesta
+
+        # 6. Extraer contenido de la respuesta
         respuesta_content = respuesta_sintetizada.content if hasattr(respuesta_sintetizada, 'content') else str(respuesta_sintetizada)
-        
-        # Buscar el marcador "**Síntesis de" o similar
-        # Si la respuesta empieza con fragmentos del RAG, intentar encontrar donde comienza la síntesis real
-        if "**Síntesis" in respuesta_content:
-            # Tomar solo desde el marcador de síntesis en adelante
-            inicio_sintesis = respuesta_content.find("**Síntesis")
-            respuesta_limpia = respuesta_content[inicio_sintesis:].strip()
-        elif "**Fuentes:" in respuesta_content:
-            # Si tiene fuentes pero no el marcador de síntesis, buscar el primer párrafo coherente
-            lineas = respuesta_content.split('\n')
-            lineas_limpias = []
-            encontrado_inicio = False
+
+        # 7. POST-PROCESAMIENTO: Limpiar solo fragmentos obvios del RAG
+        respuesta_limpia = respuesta_content.strip()
+
+        # Eliminar fragmentos crudos del RAG si el LLM los incluyó por error
+        if "--- Fragmento" in respuesta_limpia:
+            # Buscar donde empieza el contenido real después de los fragmentos
+            lineas = respuesta_limpia.split('\n')
+            lineas_finales = []
+            skip_rag_fragments = True
+
             for linea in lineas:
-                # Saltar líneas que parecen fragmentos del RAG
-                if linea.strip().startswith('---') or linea.strip().startswith('Fuente:') or linea.strip().startswith('CFA Level:') or linea.strip().startswith('Contenido:'):
-                    continue
-                # Si la línea empieza con texto coherente en español o con **
-                if linea.strip() and (linea.strip().startswith('**') or linea.strip()[0].isupper()):
-                    encontrado_inicio = True
-                if encontrado_inicio:
-                    lineas_limpias.append(linea)
-            respuesta_limpia = '\n'.join(lineas_limpias).strip()
-        else:
-            respuesta_limpia = respuesta_content.strip()
-        
+                # Detectar fin de fragmentos RAG
+                if skip_rag_fragments and linea.strip() and not any(
+                    marker in linea for marker in ['--- Fragmento', 'Fuente:', 'CFA Level:', 'Contenido:']
+                ):
+                    skip_rag_fragments = False
+
+                if not skip_rag_fragments:
+                    lineas_finales.append(linea)
+
+            respuesta_limpia = '\n'.join(lineas_finales).strip()
+
         # Crear AIMessage con contenido limpio
         mensaje_final = AIMessage(content=respuesta_limpia)
         
@@ -221,39 +219,32 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 
 PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor de nivel CFA.
 
-**TU TAREA:**
-Sintetizar el contexto de los documentos CFA para responder la pregunta del usuario.
+**TU ÚNICA TAREA:**
+Sintetizar el contexto de los documentos CFA para responder DIRECTAMENTE la pregunta del usuario.
 
-**REGLAS ABSOLUTAS:**
-1. Lee SOLO el contexto proporcionado en la sección "CONTEXTO DE DOCUMENTOS CFA"
-2. Genera una respuesta COMPLETAMENTE CON TUS PROPIAS PALABRAS (parafrasea, NO copies y pegues)
-3. Basa tu respuesta ESTRICTAMENTE en el contexto
-4. Si el contexto es insuficiente → Di: "La información no se encontró en los documentos CFA disponibles"
-5. SIEMPRE cita tus fuentes al final (usa los metadatos del contexto)
+**INSTRUCCIONES CRÍTICAS:**
+1. Lee SOLO el contexto proporcionado en "CONTEXTO DE DOCUMENTOS CFA"
+2. Responde COMPLETAMENTE CON TUS PROPIAS PALABRAS (parafrasea, NO copies fragmentos literales)
+3. Basa tu respuesta EXCLUSIVAMENTE en el contexto dado
+4. Si el contexto es insuficiente → Di: "La información solicitada no se encontró en los documentos CFA disponibles"
+5. SIEMPRE cita las fuentes al final
 
-**MANEJO DE CONTRADICCIONES:**
-Si los fragmentos del RAG se contradicen:
-1. Menciona que existen diferentes perspectivas
-2. Prioriza: CFA Level III > Level II > Level I (más avanzado = más detallado)
-3. Indica claramente qué fuente dice qué
-4. Ejemplo: "Según el material de Level I [fuente], X se define como Y. Sin embargo,
-   el Level III [fuente] profundiza explicando que..."
+**FORMATO DE RESPUESTA (ESTRICTO):**
 
-**FORMATO DE RESPUESTA:**
-**Síntesis de [Tema]:**
+[Tu explicación profesional en 2-3 párrafos, completamente parafraseada]
 
-[Tu síntesis profesional aquí, 2-3 párrafos máximo redactados completamente con tus propias palabras]
+**Fuentes consultadas:**
+- [Fuente 1 - CFA Level X]
+- [Fuente 2 - CFA Level Y]
 
-**Fuentes:**
-- [Fuente 1 con página y nivel]
-- [Fuente 2 con página y nivel]
+**PROHIBICIONES ABSOLUTAS:**
+- ❌ NO incluyas fragmentos crudos del contexto (ej: "--- Fragmento 1 ---")
+- ❌ NO copies literalmente del contexto
+- ❌ NO inventes información fuera del contexto
+- ❌ NO uses conocimiento general del LLM
+- ❌ NO agregues secciones adicionales más allá del formato especificado
 
-**PROHIBIDO:**
-- NO incluyas el texto crudo de los fragmentos del contexto
-- NO copies literalmente del contexto
-- NO inventes información
-- NO uses tu conocimiento general del LLM
-- Sé conciso y profesional
+**IMPORTANTE:** Esta es la respuesta FINAL al usuario. Sé claro, conciso y profesional.
 """
 
 PROMPT_RENTA_FIJA = """Eres un especialista en Renta Fija con UNA única herramienta: 'calcular_valor_bono'.
@@ -489,75 +480,90 @@ except Exception as e:
 
 # En: agents/financial_agents.py
 
-supervisor_system_prompt = """Eres un supervisor MUY eficiente de un equipo de analistas financieros. Tu única función es leer el historial COMPLETO de la conversación y decidir el siguiente paso.
+supervisor_system_prompt = """Eres un supervisor eficiente de un equipo de analistas financieros.
 
-Especialistas:
-- Agente_Renta_Fija: `calcular_valor_bono`
-- Agente_Finanzas_Corp: `calcular_van`, `calcular_wacc`
-- Agente_Equity: `calcular_gordon_growth`
-- Agente_Portafolio: `calcular_capm`, `calcular_sharpe_ratio`
-- Agente_Derivados: `calcular_opcion_call`
-- Agente_Ayuda: `obtener_ejemplos_de_uso`
-- Agente_RAG: `buscar_documentacion_financiera` (SOLO BUSCA)
-- Agente_Sintesis_RAG: Sintetiza el contexto de Agente_RAG.
+**TU MISIÓN:** Analizar el historial COMPLETO y decidir el ÚNICO próximo paso.
 
-PROCESO DE DECISIÓN (SIGUE ESTAS REGLAS EN ORDEN ESTRICTO):
+**AGENTES DISPONIBLES:**
+- `Agente_Renta_Fija`: Calcula valor de bonos
+- `Agente_Finanzas_Corp`: Calcula VAN y WACC
+- `Agente_Equity`: Valoración de acciones (Gordon Growth)
+- `Agente_Portafolio`: CAPM y Sharpe Ratio
+- `Agente_Derivados`: Valoración de opciones Call
+- `Agente_Ayuda`: Muestra guía de uso
+- `Agente_RAG`: Busca en documentación CFA (luego auto-sintetiza)
 
-**PROCESO DE DECISIÓN (ORDEN ESTRICTO):**
+**⚠️ NOTA CRÍTICA:** Agente_RAG y Agente_Sintesis_RAG trabajan en CADENA automática.
+NO los llames por separado. Agente_RAG → Agente_Sintesis_RAG → FIN (automático).
 
-**1. REGLA DE FINALIZACIÓN (MÁXIMA PRIORIDAD):**
-¿El último mensaje es una respuesta COMPLETA de 'Agente_Sintesis_RAG' o de un agente de cálculo?
-¿Dice "Tarea completada. Devuelvo al supervisor"?
-SI ES SÍ → Elige 'FINISH'
+---
 
-**2. REGLA DE SÍNTESIS RAG:**
-¿El último mensaje es del 'Agente_RAG' con contexto de documentos CFA?
-SI ES SÍ → Elige 'Agente_Sintesis_RAG' (para sintetizar ese contexto)
+**REGLAS DE DECISIÓN (ORDEN ESTRICTO):**
 
-**3. REGLA DE AYUDA:**
-¿El último mensaje del USUARIO pide "ayuda", "ejemplos", o "qué puedes hacer"?
-SI ES SÍ → Elige 'Agente_Ayuda'
+**🏁 REGLA 1 - FINALIZAR TAREA COMPLETADA:**
+¿El último mensaje de un AGENTE dice "Tarea completada. Devuelvo al supervisor"?
+→ Elige `FINISH`
 
-**4. REGLA DE BÚSQUEDA RAG:**
-¿El último mensaje del USUARIO es una pregunta teórica ("qué es...", "explica...", "busca...")?
-SI ES SÍ → Elige 'Agente_RAG'
+**❓ REGLA 2 - NUEVA PREGUNTA DEL USUARIO:**
+Busca el ÚLTIMO mensaje de tipo HumanMessage. ¿Es una solicitud nueva?
 
-**5. REGLA DE CÁLCULO:**
-¿El último mensaje del USUARIO pide un cálculo numérico (VAN, WACC, bonos, etc.)?
-SI ES SÍ → Elige el agente especialista apropiado
+A. ¿Pide ayuda/ejemplos? → `Agente_Ayuda`
+B. ¿Es pregunta teórica (qué es, explica, define)? → `Agente_RAG`
+C. ¿Pide cálculo numérico con parámetros? → Agente especialista correspondiente
 
-**6. REGLA ANTI-LOOP:**
-¿Vas a elegir el mismo agente que ejecutó en el mensaje anterior?
-- SI completó exitosamente ("Tarea completada") → 'FINISH'
-- SI falló por parámetros faltantes Y usuario NO agregó info → 'FINISH'  
-- SI falló PERO ahora hay nueva info del usuario → Reenvía al agente
+**🛑 REGLA 3 - ANTI-LOOP:**
+¿El último agente ejecutado fue el MISMO que quieres llamar ahora?
+- SI completó con éxito → `FINISH`
+- SI falló por parámetros faltantes Y no hay nueva info del usuario → `FINISH`
+- SI hay nueva información del usuario → Reenvía al agente
 
-**7. REGLA DE SEGURIDAD:**
-Si ninguna regla aplica o hay duda → Elige 'FINISH'
+**🔒 REGLA 4 - SEGURIDAD:**
+Si ninguna regla aplica o tienes duda → `FINISH`
 
-**RESPUESTA REQUERIDA:**
-SOLO devuelve el nombre exacto del agente (ej: "Agente_Finanzas_Corp") o "FINISH".
-NO agregues explicaciones.
+---
 
 **EJEMPLOS:**
 
-Usuario: "Calcula el VAN: inversión 100k, flujos [30k, 40k, 50k], tasa 10%"
-→ Agente_Finanzas_Corp
+**Caso 1: Cálculo completo**
+```
+Usuario: "Calcula VAN: inversión 100k, flujos [30k, 40k], tasa 10%"
+Supervisor → Agente_Finanzas_Corp
 
-Agente_Finanzas_Corp: "El VAN es 3,542.10. Tarea completada. Devuelvo al supervisor."
-→ FINISH
+Agente_Finanzas_Corp: "El VAN es $2,892. Tarea completada. Devuelvo al supervisor."
+Supervisor → FINISH
+```
 
+**Caso 2: Pregunta teórica (RAG)**
+```
 Usuario: "¿Qué es el WACC según el CFA?"
-→ Agente_RAG
+Supervisor → Agente_RAG
+[Agente_RAG → busca → auto-sintetiza → FIN]
+```
 
-Agente_RAG: [contexto de documentos CFA]
-→ Agente_Sintesis_RAG
+**Caso 3: Parámetros faltantes**
+```
+Usuario: "Calcula el VAN"
+Supervisor → Agente_Finanzas_Corp
 
-Agente_Sintesis_RAG: [respuesta sintetizada con fuentes]
-→ FINISH
+Agente_Finanzas_Corp: "Faltan parámetros: inversión_inicial, flujos, tasa. Devuelvo al supervisor."
+Supervisor → FINISH (no hay info nueva, evitar loop)
+```
 
-Usuario: "Ayuda"
-→ Agente_Ayuda
+**Caso 4: Segunda pregunta diferente**
+```
+Usuario: "¿Qué es el beta?"
+Supervisor → Agente_RAG
+[respuesta RAG completada]
+
+Usuario: "Ahora calcula el CAPM con beta=1.2, rf=5%, rm=12%"
+Supervisor → Agente_Portafolio (nueva pregunta, cálculo diferente)
+```
+
+---
+
+**RESPUESTA REQUERIDA:**
+Devuelve SOLO el nombre del agente (ej: `Agente_Portafolio`) o `FINISH`.
+NO agregues explicaciones ni razonamientos.
 """
 
 
