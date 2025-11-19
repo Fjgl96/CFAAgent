@@ -64,32 +64,25 @@ def verify_system_health():
         health_status["config"]["details"] = str(e)
         logger.error(f"❌ Config falló: {e}")
     
-    # Check 2: LLM
+    # Check 2: LLM (sin test - solo verificar instancia)
     try:
         from config import get_llm
         llm = get_llm()
-        # Test rápido
-        test_response = llm.invoke("test")
+        # Solo verificar que se puede instanciar (no hacer llamada costosa)
         health_status["llm"]["status"] = True
         health_status["llm"]["details"] = "Claude 3.5 Haiku"
-        logger.info("✅ LLM funcional")
+        logger.info("✅ LLM instanciado")
     except Exception as e:
         health_status["llm"]["details"] = str(e)
         logger.error(f"❌ LLM falló: {e}")
     
-    # Check 3: RAG
+    # Check 3: RAG (sin inicializar - lazy loading)
     try:
-        from rag.financial_rag_elasticsearch import rag_system
-        if rag_system:
-            rag_health = rag_system.get_health_status()
-            health_status["rag"]["status"] = rag_health["connection_status"] == "connected"
-            health_status["rag"]["details"] = (
-                f"Status: {rag_health['connection_status']}"
-            )
-            logger.info(f"✅ RAG status: {rag_health['connection_status']}")
-        else:
-            health_status["rag"]["details"] = "Sistema no inicializado"
-            logger.warning("⚠️ RAG no inicializado")
+        # Solo importar la función, NO inicializar el sistema
+        from rag.financial_rag_elasticsearch import get_rag_system
+        health_status["rag"]["status"] = True
+        health_status["rag"]["details"] = "Lazy loading (se conecta al usarse)"
+        logger.info("✅ RAG configurado (lazy loading)")
     except Exception as e:
         health_status["rag"]["details"] = str(e)
         logger.error(f"❌ RAG falló: {e}")
