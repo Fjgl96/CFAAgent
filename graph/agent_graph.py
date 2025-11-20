@@ -23,6 +23,10 @@ from agents.financial_agents import (
     agent_nodes, RouterSchema
 )
 
+# Importar sistema de routing (Arquitectura de 3 Capas)
+from routing import FastPatternRouter, LLMRouter, HybridRouter
+from pathlib import Path
+
 # Importar logger
 try:
     from utils.logger import get_logger
@@ -223,26 +227,52 @@ def supervisor_node(state: AgentState) -> dict:
         }
     
     # ========================================
-    # ENRUTAMIENTO NORMAL
+    # ENRUTAMIENTO CON SISTEMA HÍBRIDO
     # ========================================
-    
-    supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
-    
+
     next_node_decision = "FINISH"  # Default
+    routing_method = "unknown"
+    routing_confidence = 0.0
+
     try:
-        route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
-        if hasattr(route, 'next_agent'):
-            next_node_decision = route.next_agent
+        # Usar sistema de routing híbrido (Fast + LLM)
+        global ROUTING_SYSTEM
+
+        if ROUTING_SYSTEM:
+            # Usar arquitectura de 3 capas
+            decision = ROUTING_SYSTEM.route(state)
+            next_node_decision = decision.target_agent
+            routing_method = decision.method
+            routing_confidence = decision.confidence
+
+            logger.info(
+                f"🧭 Routing decision: {next_node_decision} "
+                f"(method={routing_method}, conf={routing_confidence:.2f})"
+            )
         else:
-            logger.warning("⚠️ Respuesta del supervisor sin 'next_agent'. Usando FINISH.")
-            next_node_decision = "FINISH"
-        
-        logger.info(f"🧭 Supervisor decide: {next_node_decision}")
-        
+            # Fallback a supervisor directo (si routing no está inicializado)
+            logger.warning("⚠️ ROUTING_SYSTEM no inicializado, usando supervisor directo")
+
+            supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
+            route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
+
+            if hasattr(route, 'next_agent'):
+                next_node_decision = route.next_agent
+            else:
+                logger.warning("⚠️ Respuesta del supervisor sin 'next_agent'. Usando FINISH.")
+                next_node_decision = "FINISH"
+
+            routing_method = "llm_direct"
+            routing_confidence = 0.95
+
+            logger.info(f"🧭 Supervisor decide: {next_node_decision}")
+
     except Exception as e:
-        logger.error(f"❌ Error en supervisor LLM: {e}", exc_info=True)
-        st.warning(f"Advertencia: El supervisor falló ({e}). Finalizando.")
+        logger.error(f"❌ Error en routing: {e}", exc_info=True)
+        st.warning(f"Advertencia: El routing falló ({e}). Finalizando.")
         next_node_decision = "FINISH"
+        routing_method = "error_fallback"
+        routing_confidence = 0.0
     
     # ========================================
     # RESETEAR CONTADOR SI TIENE ÉXITO
@@ -263,7 +293,10 @@ def supervisor_node(state: AgentState) -> dict:
         "error_count": error_count,
         "error_types": error_types,
         "circuit_open": circuit_open,
-        "last_error_time": datetime.now().timestamp() if possible_error_detected else 0
+        "last_error_time": datetime.now().timestamp() if possible_error_detected else 0,
+        # Metadata del sistema de routing
+        "routing_method": routing_method,
+        "routing_confidence": routing_confidence
     }
 
 
@@ -339,6 +372,62 @@ def build_graph():
 
 
 # ========================================
+# SISTEMA DE ROUTING HÍBRIDO
+# ========================================
+
+ROUTING_SYSTEM = None
+
+def initialize_routing_system():
+    """
+    Inicializa el sistema de routing híbrido.
+    Combina FastPatternRouter (rápido) con LLMRouter (preciso).
+
+    Returns:
+        HybridRouter configurado
+    """
+    global ROUTING_SYSTEM
+
+    logger.info("🔧 Inicializando sistema de routing híbrido...")
+
+    try:
+        # Ruta al archivo de configuración YAML
+        config_path = Path(__file__).parent.parent / "config" / "routing_patterns.yaml"
+
+        # 1. Crear FastPatternRouter
+        fast_router = FastPatternRouter(
+            config_path=str(config_path) if config_path.exists() else None
+        )
+        logger.info("  ✅ FastPatternRouter inicializado")
+
+        # 2. Crear LLMRouter (wrapper del supervisor)
+        llm_router = LLMRouter(
+            supervisor_llm=supervisor_llm,
+            supervisor_prompt=supervisor_system_prompt,  # ← NO SE MODIFICA
+            router_schema=RouterSchema
+        )
+        logger.info("  ✅ LLMRouter inicializado (usando supervisor actual)")
+
+        # 3. Crear HybridRouter
+        hybrid_router = HybridRouter(
+            fast_router=fast_router,
+            llm_router=llm_router,
+            threshold=0.8  # Ajustable desde config
+        )
+        logger.info("  ✅ HybridRouter inicializado (threshold=0.8)")
+
+        ROUTING_SYSTEM = hybrid_router
+        logger.info("🚀 Sistema de routing híbrido ACTIVO")
+
+        return ROUTING_SYSTEM
+
+    except Exception as e:
+        logger.error(f"❌ Error inicializando routing system: {e}", exc_info=True)
+        logger.warning("⚠️ Continuando con supervisor directo (sin optimización)")
+        ROUTING_SYSTEM = None
+        return None
+
+
+# ========================================
 # INSTANCIA GLOBAL
 # ========================================
 
@@ -350,4 +439,11 @@ except Exception as build_error:
     st.error(f"Error fatal al construir el agente gráfico: {build_error}")
     st.stop()
 
-logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker Inteligente)")
+# Inicializar sistema de routing
+try:
+    initialize_routing_system()
+except Exception as routing_error:
+    logger.error(f"❌ Error fatal en routing system: {routing_error}", exc_info=True)
+    logger.warning("⚠️ Sistema continuará con routing básico")
+
+logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker + Routing Híbrido)")

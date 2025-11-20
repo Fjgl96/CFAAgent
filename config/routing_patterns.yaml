@@ -1,0 +1,460 @@
+# ========================================
+# CONFIGURACIÓN DE PATRONES DE ROUTING
+# Sistema de Routing Inteligente - CFAAgent
+# ========================================
+
+version: "1.0"
+
+# ========================================
+# CONFIGURACIÓN GLOBAL
+# ========================================
+
+settings:
+  # Umbral mínimo de confianza para bypass directo
+  confidence_threshold: 0.8
+
+  # Cantidad mínima de parámetros para considerar bypass
+  min_params_for_bypass: 2
+
+  # Soporte multiidioma
+  multiidioma: true
+
+# ========================================
+# PATRONES DE INTENCIÓN DE CÁLCULO
+# ========================================
+
+calc_intent_patterns:
+  spanish:
+    - '\bcalcula(?:r)?\b'
+    - '\bobt[eé]n(?:er)?\b'
+    - '\bdetermin(?:a|ar)\b'
+    - '\bcomput(?:a|ar)\b'
+    - '\bencuentra(?:me)?\b'
+    - '\bresuelve\b'
+    - '\bprocesa\b'
+
+  english:
+    - '\bcalculate\b'
+    - '\bcompute\b'
+    - '\bdetermine\b'
+    - '\bfind\b'
+    - '\bsolve\b'
+    - '\bprocess\b'
+
+# ========================================
+# MAPEO DE KEYWORDS A AGENTES
+# (Ordenados por prioridad - mayor primero)
+# ========================================
+
+agent_mappings:
+
+  # ========================================
+  # FINANZAS CORPORATIVAS (5 herramientas)
+  # ========================================
+
+  - agent: Agente_Finanzas_Corp
+    priority: 10
+    keywords:
+      spanish:
+        - '\bvan\b'
+        - 'valor actual neto'
+        - 'npv'
+      english:
+        - 'npv'
+        - 'net present value'
+    required_params: 3
+    param_hints:
+      - 'inversión inicial'
+      - 'flujos de caja'
+      - 'tasa de descuento'
+
+  - agent: Agente_Finanzas_Corp
+    priority: 9
+    keywords:
+      spanish:
+        - '\bwacc\b'
+        - 'costo.*capital'
+        - 'costo promedio ponderado'
+      english:
+        - 'wacc'
+        - 'weighted average cost'
+    required_params: 5
+    param_hints:
+      - 'costo equity'
+      - 'costo deuda'
+      - 'valor equity'
+      - 'valor deuda'
+      - 'tasa impuesto'
+
+  - agent: Agente_Finanzas_Corp
+    priority: 9
+    keywords:
+      spanish:
+        - '\btir\b'
+        - 'irr'
+        - 'tasa.*interna.*retorno'
+      english:
+        - 'irr'
+        - 'internal rate.*return'
+    required_params: 2
+    param_hints:
+      - 'inversión inicial'
+      - 'flujos de caja'
+
+  - agent: Agente_Finanzas_Corp
+    priority: 8
+    keywords:
+      spanish:
+        - 'payback'
+        - 'per[ií]odo.*recuperaci[oó]n'
+      english:
+        - 'payback period'
+    required_params: 2
+    param_hints:
+      - 'inversión inicial'
+      - 'flujos de caja'
+
+  - agent: Agente_Finanzas_Corp
+    priority: 8
+    keywords:
+      spanish:
+        - 'profitability.*index'
+        - '[íi]ndice.*rentabilidad'
+      english:
+        - 'profitability index'
+    required_params: 3
+    param_hints:
+      - 'tasa descuento'
+      - 'inversión inicial'
+      - 'flujos de caja'
+
+  # ========================================
+  # PORTAFOLIO (7 herramientas)
+  # ========================================
+
+  - agent: Agente_Portafolio
+    priority: 10
+    keywords:
+      spanish:
+        - '\bcapm\b'
+        - 'capital asset pricing'
+      english:
+        - 'capm'
+        - 'capital asset pricing'
+    required_params: 3
+    param_hints:
+      - 'tasa libre riesgo'
+      - 'beta'
+      - 'retorno mercado'
+
+  - agent: Agente_Portafolio
+    priority: 9
+    keywords:
+      spanish:
+        - 'sharpe'
+        - 'ratio.*sharpe'
+      english:
+        - 'sharpe ratio'
+    required_params: 3
+    param_hints:
+      - 'retorno portafolio'
+      - 'tasa libre riesgo'
+      - 'desviación estándar'
+
+  - agent: Agente_Portafolio
+    priority: 9
+    keywords:
+      spanish:
+        - 'treynor'
+        - 'ratio.*treynor'
+      english:
+        - 'treynor ratio'
+    required_params: 3
+    param_hints:
+      - 'retorno portafolio'
+      - 'tasa libre riesgo'
+      - 'beta portafolio'
+
+  - agent: Agente_Portafolio
+    priority: 9
+    keywords:
+      spanish:
+        - 'jensen'
+        - 'alpha'
+        - 'jensen.*alpha'
+      english:
+        - 'jensen alpha'
+        - 'jensen.*alpha'
+    required_params: 4
+    param_hints:
+      - 'retorno portafolio'
+      - 'tasa libre riesgo'
+      - 'beta portafolio'
+      - 'retorno mercado'
+
+  - agent: Agente_Portafolio
+    priority: 8
+    keywords:
+      spanish:
+        - 'beta.*portafolio'
+        - 'beta.*cartera'
+      english:
+        - 'portfolio beta'
+        - 'portfolio.*beta'
+    required_params: 4
+    param_hints:
+      - 'peso activo 1'
+      - 'peso activo 2'
+      - 'beta activo 1'
+      - 'beta activo 2'
+
+  - agent: Agente_Portafolio
+    priority: 8
+    keywords:
+      spanish:
+        - 'retorno.*portafolio'
+        - 'retorno.*cartera'
+      english:
+        - 'portfolio return'
+        - 'expected return.*portfolio'
+    required_params: 4
+    param_hints:
+      - 'peso activo 1'
+      - 'peso activo 2'
+      - 'retorno activo 1'
+      - 'retorno activo 2'
+
+  - agent: Agente_Portafolio
+    priority: 8
+    keywords:
+      spanish:
+        - 'desviaci[oó]n.*portafolio'
+        - 'std.*portafolio'
+        - 'volatilidad.*portafolio'
+      english:
+        - 'portfolio.*std'
+        - 'portfolio.*standard deviation'
+        - 'portfolio volatility'
+    required_params: 5
+    param_hints:
+      - 'peso activo 1'
+      - 'peso activo 2'
+      - 'std activo 1'
+      - 'std activo 2'
+      - 'correlación'
+
+  # ========================================
+  # RENTA FIJA (6 herramientas)
+  # ========================================
+
+  - agent: Agente_Renta_Fija
+    priority: 10
+    keywords:
+      spanish:
+        - 'valor.*bono'
+        - 'precio.*bono'
+        - 'bond.*value'
+      english:
+        - 'bond.*value'
+        - 'bond.*price'
+        - 'bond valuation'
+    required_params: 5
+    param_hints:
+      - 'valor nominal'
+      - 'tasa cupón'
+      - 'tasa descuento'
+      - 'años'
+      - 'frecuencia'
+
+  - agent: Agente_Renta_Fija
+    priority: 9
+    keywords:
+      spanish:
+        - 'duration.*macaulay'
+        - 'macaulay'
+      english:
+        - 'macaulay duration'
+        - 'macaulay.*duration'
+    required_params: 5
+    param_hints:
+      - 'valor nominal'
+      - 'tasa cupón'
+      - 'ytm'
+      - 'años'
+      - 'frecuencia'
+
+  - agent: Agente_Renta_Fija
+    priority: 9
+    keywords:
+      spanish:
+        - 'duration.*modificada'
+        - 'modified.*duration'
+      english:
+        - 'modified duration'
+        - 'modified.*duration'
+    required_params: 3
+    param_hints:
+      - 'duration macaulay'
+      - 'ytm'
+      - 'frecuencia'
+
+  - agent: Agente_Renta_Fija
+    priority: 8
+    keywords:
+      spanish:
+        - 'convexity'
+        - 'convexidad'
+      english:
+        - 'convexity'
+    required_params: 5
+    param_hints:
+      - 'valor nominal'
+      - 'tasa cupón'
+      - 'ytm'
+      - 'años'
+      - 'frecuencia'
+
+  - agent: Agente_Renta_Fija
+    priority: 8
+    keywords:
+      spanish:
+        - 'current.*yield'
+        - 'rendimiento.*corriente'
+      english:
+        - 'current yield'
+    required_params: 2
+    param_hints:
+      - 'pago cupón anual'
+      - 'precio actual'
+
+  - agent: Agente_Renta_Fija
+    priority: 8
+    keywords:
+      spanish:
+        - 'bono.*cup[oó]n.*cero'
+        - 'zero.*coupon.*bond'
+      english:
+        - 'zero coupon bond'
+        - 'zero.*coupon'
+    required_params: 3
+    param_hints:
+      - 'valor nominal'
+      - 'ytm'
+      - 'años'
+
+  # ========================================
+  # EQUITY (1 herramienta)
+  # ========================================
+
+  - agent: Agente_Equity
+    priority: 10
+    keywords:
+      spanish:
+        - 'gordon'
+        - 'gordon.*growth'
+        - 'ddm'
+        - 'dividend.*discount'
+      english:
+        - 'gordon growth'
+        - 'gordon.*growth.*model'
+        - 'ddm'
+        - 'dividend discount model'
+    required_params: 3
+    param_hints:
+      - 'dividendo próximo periodo'
+      - 'tasa descuento equity'
+      - 'tasa crecimiento'
+
+  # ========================================
+  # DERIVADOS (3 herramientas)
+  # ========================================
+
+  - agent: Agente_Derivados
+    priority: 10
+    keywords:
+      spanish:
+        - 'opci[oó]n.*call'
+        - 'call.*option'
+      english:
+        - 'call option'
+        - 'call.*option'
+    required_params: 5
+    param_hints:
+      - 'precio spot (S)'
+      - 'strike (K)'
+      - 'tiempo vencimiento (T)'
+      - 'tasa libre riesgo (r)'
+      - 'volatilidad (sigma)'
+
+  - agent: Agente_Derivados
+    priority: 10
+    keywords:
+      spanish:
+        - 'opci[oó]n.*put'
+        - 'put.*option'
+      english:
+        - 'put option'
+        - 'put.*option'
+    required_params: 5
+    param_hints:
+      - 'precio spot (S)'
+      - 'strike (K)'
+      - 'tiempo vencimiento (T)'
+      - 'tasa libre riesgo (r)'
+      - 'volatilidad (sigma)'
+
+  - agent: Agente_Derivados
+    priority: 9
+    keywords:
+      spanish:
+        - 'put.*call.*parity'
+        - 'paridad.*put.*call'
+      english:
+        - 'put call parity'
+        - 'put.*call.*parity'
+    required_params: 6
+    param_hints:
+      - 'precio call'
+      - 'precio put'
+      - 'precio spot'
+      - 'strike'
+      - 'tiempo vencimiento'
+      - 'tasa libre riesgo'
+
+# ========================================
+# PATRONES DE PARÁMETROS NUMÉRICOS
+# ========================================
+
+param_patterns:
+  - name: 'cantidad_k'
+    regex: '\d+(?:\.\d+)?k\b'
+    description: 'Números con sufijo "k" (ej: 100k, 2.5k)'
+
+  - name: 'porcentaje'
+    regex: '\d+(?:\.\d+)?%'
+    description: 'Porcentajes (ej: 10%, 5.5%)'
+
+  - name: 'lista'
+    regex: '\[\s*\d+(?:\s*,\s*\d+)*\s*\]'
+    description: 'Listas de números (ej: [30, 40, 50])'
+
+  - name: 'numero'
+    regex: '\d+(?:\.\d+)?'
+    description: 'Números genéricos (ej: 100, 2.5)'
+
+# ========================================
+# NOTAS DE MANTENIMIENTO
+# ========================================
+
+# IMPORTANTE: Este archivo define los patrones de routing.
+# Al añadir una nueva herramienta:
+# 1. Añadir mapping en la sección agent_mappings
+# 2. Definir keywords en español e inglés
+# 3. Especificar required_params
+# 4. Opcionalmente añadir param_hints para documentación
+#
+# Prioridades sugeridas:
+# - 10: Herramientas muy específicas (pocas keywords ambiguas)
+# - 9: Herramientas específicas
+# - 8: Herramientas con keywords potencialmente ambiguas
+# - 7 o menos: Herramientas genéricas o de fallback
