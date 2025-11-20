@@ -238,55 +238,115 @@ def create_or_recreate_index(es_client):
     print(f"✅ Índice '{ES_INDEX_NAME}' creado\n")
 
 
+def estimate_tokens(text: str) -> int:
+    """
+    Estima la cantidad de tokens en un texto.
+    Aproximación: ~4 caracteres = 1 token para inglés.
+    """
+    return len(text) // 4
+
+
+def create_batches(chunks, max_tokens_per_batch=250000):
+    """
+    Divide chunks en batches que no excedan el límite de tokens.
+
+    Args:
+        chunks: Lista de documentos
+        max_tokens_per_batch: Límite de tokens por batch (dejamos margen de 250k vs 300k límite)
+
+    Returns:
+        Lista de lotes de chunks
+    """
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for chunk in chunks:
+        # Estimar tokens del chunk
+        chunk_tokens = estimate_tokens(chunk.page_content)
+
+        # Si añadir este chunk excede el límite, crear nuevo batch
+        if current_tokens + chunk_tokens > max_tokens_per_batch and current_batch:
+            batches.append(current_batch)
+            current_batch = [chunk]
+            current_tokens = chunk_tokens
+        else:
+            current_batch.append(chunk)
+            current_tokens += chunk_tokens
+
+    # Añadir último batch si tiene contenido
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
 def index_documents_to_elasticsearch(chunks):
-    """Indexa los chunks en Elasticsearch usando OpenAI Embeddings."""
+    """Indexa los chunks en Elasticsearch usando OpenAI Embeddings con batching."""
     print_header("Indexando Documentos en Elasticsearch")
-    
+
     from langchain_openai import OpenAIEmbeddings
     from langchain_elasticsearch import ElasticsearchStore
     from config_elasticsearch import get_es_config
-    
+
     print(f"🧠 Modelo de embeddings OpenAI: {EMBEDDING_MODEL}")
     print(f"   Dimensiones: {EMBEDDING_DIMENSIONS}")
     print(f"   ⚡ Velocidad: ~1 segundo por lote\n")
-    
+
     # Verificar API key
     if not OPENAI_API_KEY:
         print("❌ ERROR: OPENAI_API_KEY no encontrada")
         sys.exit(1)
-    
+
     # Inicializar embeddings de OpenAI
     embeddings = OpenAIEmbeddings(
         model=EMBEDDING_MODEL,
         openai_api_key=OPENAI_API_KEY,
-        chunk_size=1000,  # Procesar 1000 textos por lote
+        chunk_size=500,  # Reducido de 1000 a 500 por seguridad
         max_retries=3
     )
-    
-    print(f"📤 Indexando {len(chunks)} chunks en Elasticsearch...")
-    print(f"   Índice: {ES_INDEX_NAME}")
-    print("   (Mucho más rápido que HuggingFace en CPU)\n")
-    
+
+    # Obtener configuración
+    es_config = get_es_config()
+
+    # Crear batches para evitar exceder límite de tokens
+    print(f"📦 Creando batches de documentos...")
+    batches = create_batches(chunks, max_tokens_per_batch=250000)
+    print(f"   Total chunks: {len(chunks)}")
+    print(f"   Total batches: {len(batches)}")
+    print(f"   Chunks por batch (aprox): {len(chunks) // len(batches) if batches else 0}\n")
+
     try:
-        # Obtener configuración
-        es_config = get_es_config()
-        
-        # Crear ElasticsearchStore desde documentos (LangChain 1.0 syntax)
-        vector_store = ElasticsearchStore.from_documents(
-            documents=chunks,
-            embedding=embeddings,
-            index_name=ES_INDEX_NAME,
-            es_url=es_config["es_url"],
-            es_user=es_config["es_user"],
-            es_password=es_config["es_password"],
-            bulk_kwargs={
-                "request_timeout": 120  # <-- ¡Añade esto!
-            }
-        )
-        
-        print("✅ Documentos indexados exitosamente\n")
+        vector_store = None
+        total_indexed = 0
+
+        for i, batch in enumerate(batches, 1):
+            print(f"📤 Procesando batch {i}/{len(batches)} ({len(batch)} chunks)...")
+
+            if i == 1:
+                # Primer batch: crear el vector store
+                vector_store = ElasticsearchStore.from_documents(
+                    documents=batch,
+                    embedding=embeddings,
+                    index_name=ES_INDEX_NAME,
+                    es_url=es_config["es_url"],
+                    es_user=es_config["es_user"],
+                    es_password=es_config["es_password"],
+                    bulk_kwargs={"request_timeout": 120}
+                )
+            else:
+                # Batches siguientes: añadir al vector store existente
+                vector_store.add_documents(
+                    documents=batch,
+                    bulk_kwargs={"request_timeout": 120}
+                )
+
+            total_indexed += len(batch)
+            print(f"   ✅ Batch {i} completado ({total_indexed}/{len(chunks)} chunks indexados)")
+
+        print(f"\n✅ Todos los documentos indexados exitosamente ({total_indexed} chunks)\n")
         return True
-    
+
     except Exception as e:
         print(f"❌ ERROR indexando documentos: {e}")
         import traceback
