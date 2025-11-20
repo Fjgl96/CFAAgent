@@ -23,8 +23,8 @@ from agents.financial_agents import (
     agent_nodes, RouterSchema
 )
 
-# Importar sistema de routing (Arquitectura de 3 Capas)
-from routing import FastPatternRouter, LLMRouter, HybridRouter
+# Importar sistema de routing (LangChain-native con Runnables)
+from routing.langchain_routing import create_routing_node
 from pathlib import Path
 
 # Importar logger
@@ -227,7 +227,7 @@ def supervisor_node(state: AgentState) -> dict:
         }
     
     # ========================================
-    # ENRUTAMIENTO CON SISTEMA HÍBRIDO
+    # ENRUTAMIENTO (LANGCHAIN-NATIVE)
     # ========================================
 
     next_node_decision = "FINISH"  # Default
@@ -235,15 +235,16 @@ def supervisor_node(state: AgentState) -> dict:
     routing_confidence = 0.0
 
     try:
-        # Usar sistema de routing híbrido (Fast + LLM)
-        global ROUTING_SYSTEM
+        # Usar nodo de routing (LangChain Runnables)
+        global ROUTING_NODE
 
-        if ROUTING_SYSTEM:
-            # Usar arquitectura de 3 capas
-            decision = ROUTING_SYSTEM.route(state)
-            next_node_decision = decision.target_agent
-            routing_method = decision.method
-            routing_confidence = decision.confidence
+        if ROUTING_NODE:
+            # Ejecutar nodo de routing (usa RunnableBranch internamente)
+            result = ROUTING_NODE(state)
+
+            next_node_decision = result.get('next_node', 'FINISH')
+            routing_method = result.get('routing_method', 'unknown')
+            routing_confidence = result.get('routing_confidence', 0.0)
 
             logger.info(
                 f"🧭 Routing decision: {next_node_decision} "
@@ -251,7 +252,7 @@ def supervisor_node(state: AgentState) -> dict:
             )
         else:
             # Fallback a supervisor directo (si routing no está inicializado)
-            logger.warning("⚠️ ROUTING_SYSTEM no inicializado, usando supervisor directo")
+            logger.warning("⚠️ ROUTING_NODE no inicializado, usando supervisor directo")
 
             supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
             route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
@@ -372,58 +373,50 @@ def build_graph():
 
 
 # ========================================
-# SISTEMA DE ROUTING HÍBRIDO
+# SISTEMA DE ROUTING (LANGCHAIN-NATIVE)
 # ========================================
 
-ROUTING_SYSTEM = None
+ROUTING_NODE = None
 
 def initialize_routing_system():
     """
-    Inicializa el sistema de routing híbrido.
-    Combina FastPatternRouter (rápido) con LLMRouter (preciso).
+    Inicializa el sistema de routing usando herramientas nativas de LangChain.
+
+    ENFOQUE LANGCHAIN-NATIVE:
+    - Usa RunnableBranch para routing condicional (idiomático de LangChain)
+    - Usa RunnableLambda para wrappear lógica custom
+    - Compatible 100% con LCEL (LangChain Expression Language)
+    - No usa clases custom - todo son Runnables nativos
 
     Returns:
-        HybridRouter configurado
+        Nodo de routing configurado (función compatible con LangGraph)
     """
-    global ROUTING_SYSTEM
+    global ROUTING_NODE
 
-    logger.info("🔧 Inicializando sistema de routing híbrido...")
+    logger.info("🔧 Inicializando sistema de routing (LangChain-native)...")
 
     try:
         # Ruta al archivo de configuración YAML
         config_path = Path(__file__).parent.parent / "config" / "routing_patterns.yaml"
 
-        # 1. Crear FastPatternRouter
-        fast_router = FastPatternRouter(
-            config_path=str(config_path) if config_path.exists() else None
-        )
-        logger.info("  ✅ FastPatternRouter inicializado")
-
-        # 2. Crear LLMRouter (wrapper del supervisor)
-        llm_router = LLMRouter(
+        # Crear nodo de routing usando RunnableBranch
+        # Patrón idiomático de LangChain: composición de Runnables
+        ROUTING_NODE = create_routing_node(
             supervisor_llm=supervisor_llm,
             supervisor_prompt=supervisor_system_prompt,  # ← NO SE MODIFICA
-            router_schema=RouterSchema
+            threshold=0.8,  # Umbral ajustable
+            config_path=str(config_path) if config_path.exists() else None
         )
-        logger.info("  ✅ LLMRouter inicializado (usando supervisor actual)")
 
-        # 3. Crear HybridRouter
-        hybrid_router = HybridRouter(
-            fast_router=fast_router,
-            llm_router=llm_router,
-            threshold=0.8  # Ajustable desde config
-        )
-        logger.info("  ✅ HybridRouter inicializado (threshold=0.8)")
+        logger.info("  ✅ Routing node creado (RunnableBranch + RunnableLambda)")
+        logger.info("🚀 Sistema de routing LangChain-native ACTIVO")
 
-        ROUTING_SYSTEM = hybrid_router
-        logger.info("🚀 Sistema de routing híbrido ACTIVO")
-
-        return ROUTING_SYSTEM
+        return ROUTING_NODE
 
     except Exception as e:
         logger.error(f"❌ Error inicializando routing system: {e}", exc_info=True)
         logger.warning("⚠️ Continuando con supervisor directo (sin optimización)")
-        ROUTING_SYSTEM = None
+        ROUTING_NODE = None
         return None
 
 
@@ -446,4 +439,4 @@ except Exception as routing_error:
     logger.error(f"❌ Error fatal en routing system: {routing_error}", exc_info=True)
     logger.warning("⚠️ Sistema continuará con routing básico")
 
-logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker + Routing Híbrido)")
+logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker + Routing LangChain-native)")
