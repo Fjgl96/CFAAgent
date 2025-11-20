@@ -23,6 +23,10 @@ from agents.financial_agents import (
     agent_nodes, RouterSchema
 )
 
+# Importar sistema de routing (LangChain-native con Runnables)
+from routing.langchain_routing import create_routing_node
+from pathlib import Path
+
 # Importar logger
 try:
     from utils.logger import get_logger
@@ -223,26 +227,53 @@ def supervisor_node(state: AgentState) -> dict:
         }
     
     # ========================================
-    # ENRUTAMIENTO NORMAL
+    # ENRUTAMIENTO (LANGCHAIN-NATIVE)
     # ========================================
-    
-    supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
-    
+
     next_node_decision = "FINISH"  # Default
+    routing_method = "unknown"
+    routing_confidence = 0.0
+
     try:
-        route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
-        if hasattr(route, 'next_agent'):
-            next_node_decision = route.next_agent
+        # Usar nodo de routing (LangChain Runnables)
+        global ROUTING_NODE
+
+        if ROUTING_NODE:
+            # Ejecutar nodo de routing (usa RunnableBranch internamente)
+            result = ROUTING_NODE(state)
+
+            next_node_decision = result.get('next_node', 'FINISH')
+            routing_method = result.get('routing_method', 'unknown')
+            routing_confidence = result.get('routing_confidence', 0.0)
+
+            logger.info(
+                f"🧭 Routing decision: {next_node_decision} "
+                f"(method={routing_method}, conf={routing_confidence:.2f})"
+            )
         else:
-            logger.warning("⚠️ Respuesta del supervisor sin 'next_agent'. Usando FINISH.")
-            next_node_decision = "FINISH"
-        
-        logger.info(f"🧭 Supervisor decide: {next_node_decision}")
-        
+            # Fallback a supervisor directo (si routing no está inicializado)
+            logger.warning("⚠️ ROUTING_NODE no inicializado, usando supervisor directo")
+
+            supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
+            route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
+
+            if hasattr(route, 'next_agent'):
+                next_node_decision = route.next_agent
+            else:
+                logger.warning("⚠️ Respuesta del supervisor sin 'next_agent'. Usando FINISH.")
+                next_node_decision = "FINISH"
+
+            routing_method = "llm_direct"
+            routing_confidence = 0.95
+
+            logger.info(f"🧭 Supervisor decide: {next_node_decision}")
+
     except Exception as e:
-        logger.error(f"❌ Error en supervisor LLM: {e}", exc_info=True)
-        st.warning(f"Advertencia: El supervisor falló ({e}). Finalizando.")
+        logger.error(f"❌ Error en routing: {e}", exc_info=True)
+        st.warning(f"Advertencia: El routing falló ({e}). Finalizando.")
         next_node_decision = "FINISH"
+        routing_method = "error_fallback"
+        routing_confidence = 0.0
     
     # ========================================
     # RESETEAR CONTADOR SI TIENE ÉXITO
@@ -263,7 +294,10 @@ def supervisor_node(state: AgentState) -> dict:
         "error_count": error_count,
         "error_types": error_types,
         "circuit_open": circuit_open,
-        "last_error_time": datetime.now().timestamp() if possible_error_detected else 0
+        "last_error_time": datetime.now().timestamp() if possible_error_detected else 0,
+        # Metadata del sistema de routing
+        "routing_method": routing_method,
+        "routing_confidence": routing_confidence
     }
 
 
@@ -339,6 +373,54 @@ def build_graph():
 
 
 # ========================================
+# SISTEMA DE ROUTING (LANGCHAIN-NATIVE)
+# ========================================
+
+ROUTING_NODE = None
+
+def initialize_routing_system():
+    """
+    Inicializa el sistema de routing usando herramientas nativas de LangChain.
+
+    ENFOQUE LANGCHAIN-NATIVE:
+    - Usa RunnableBranch para routing condicional (idiomático de LangChain)
+    - Usa RunnableLambda para wrappear lógica custom
+    - Compatible 100% con LCEL (LangChain Expression Language)
+    - No usa clases custom - todo son Runnables nativos
+
+    Returns:
+        Nodo de routing configurado (función compatible con LangGraph)
+    """
+    global ROUTING_NODE
+
+    logger.info("🔧 Inicializando sistema de routing (LangChain-native)...")
+
+    try:
+        # Ruta al archivo de configuración YAML
+        config_path = Path(__file__).parent.parent / "config" / "routing_patterns.yaml"
+
+        # Crear nodo de routing usando RunnableBranch
+        # Patrón idiomático de LangChain: composición de Runnables
+        ROUTING_NODE = create_routing_node(
+            supervisor_llm=supervisor_llm,
+            supervisor_prompt=supervisor_system_prompt,  # ← NO SE MODIFICA
+            threshold=0.8,  # Umbral ajustable
+            config_path=str(config_path) if config_path.exists() else None
+        )
+
+        logger.info("  ✅ Routing node creado (RunnableBranch + RunnableLambda)")
+        logger.info("🚀 Sistema de routing LangChain-native ACTIVO")
+
+        return ROUTING_NODE
+
+    except Exception as e:
+        logger.error(f"❌ Error inicializando routing system: {e}", exc_info=True)
+        logger.warning("⚠️ Continuando con supervisor directo (sin optimización)")
+        ROUTING_NODE = None
+        return None
+
+
+# ========================================
 # INSTANCIA GLOBAL
 # ========================================
 
@@ -350,4 +432,11 @@ except Exception as build_error:
     st.error(f"Error fatal al construir el agente gráfico: {build_error}")
     st.stop()
 
-logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker Inteligente)")
+# Inicializar sistema de routing
+try:
+    initialize_routing_system()
+except Exception as routing_error:
+    logger.error(f"❌ Error fatal en routing system: {routing_error}", exc_info=True)
+    logger.warning("⚠️ Sistema continuará con routing básico")
+
+logger.info("✅ Módulo agent_graph cargado (LangChain 1.0 + Circuit Breaker + Routing LangChain-native)")
