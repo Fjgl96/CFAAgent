@@ -235,7 +235,7 @@ Sintetizar el contexto del material financiero (en inglés) para responder en ES
 2. Responde en ESPAÑOL, con TUS PROPIAS PALABRAS (parafrasea, NO copies fragmentos literales)
 3. Basa tu respuesta EXCLUSIVAMENTE en el contexto dado
 4. Si el contexto es insuficiente → Di: "La información solicitada no se encontró en el material de estudio disponible"
-5. SIEMPRE cita las fuentes al final
+
 
 **MANEJO DE TÉRMINOS TÉCNICOS (MUY IMPORTANTE):**
 - Usa la TRADUCCIÓN EN ESPAÑOL de conceptos técnicos
@@ -252,9 +252,7 @@ Sintetizar el contexto del material financiero (en inglés) para responder en ES
 [Tu explicación profesional en 2-3 párrafos en español, completamente parafraseada,
  con términos técnicos traducidos + acrónimos en inglés entre paréntesis]
 
-**Fuentes consultadas:**
-- [Fuente 1 -  Y,pagina Z]
-- [Fuente 2 - X, pagina W]
+
 
 **PROHIBICIONES ABSOLUTAS:**
 - ❌ NO incluyas fragmentos crudos del contexto (ej: "--- Fragmento 1 ---")
