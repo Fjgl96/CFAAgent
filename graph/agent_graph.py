@@ -55,12 +55,13 @@ class AgentState(TypedDict):
 def detect_error_type(message: AIMessage) -> str:
     """
     Detecta el tipo de error en un mensaje de agente.
+    CORREGIDO: No confunde mensajes de éxito con errores.
     
     Args:
         message: Mensaje del agente a analizar
     
     Returns:
-        Tipo de error: 'tool_failure', 'validation', 'capability', 'unknown'
+        Tipo de error: 'tool_failure', 'validation', 'capability', 'success', 'unknown'
     """
     # Extraer contenido del mensaje
     full_content = ""
@@ -73,14 +74,21 @@ def detect_error_type(message: AIMessage) -> str:
             elif isinstance(part, str):
                 full_content += part.lower()
     
-    # Clasificar por keywords
+    # ✅ PRIMERO: Detectar ÉXITO (para evitar falsos positivos)
+    # Un mensaje exitoso contiene "tarea completada" junto con "devuelvo al supervisor"
+    if 'tarea completada' in full_content and 'devuelvo al supervisor' in full_content:
+        return 'success'
+    
+    # ❌ Clasificar por keywords de ERROR
     if any(kw in full_content for kw in ['error calculando', 'problema técnico', 'fallo herramienta']):
         return 'tool_failure'
     
     if any(kw in full_content for kw in ['faltan parámetros', 'inválido', 'debe ser mayor']):
         return 'validation'
     
-    if any(kw in full_content for kw in ['no es mi especialidad', 'no puedo hacer', 'devuelvo al supervisor']):
+    # ⚠️ Solo es error de capability si dice "no es mi especialidad" o "no puedo hacer"
+    # pero NO si dice "tarea completada"
+    if any(kw in full_content for kw in ['no es mi especialidad', 'no puedo hacer']):
         return 'capability'
     
     return 'unknown'
@@ -166,8 +174,18 @@ def supervisor_node(state: AgentState) -> dict:
         if not getattr(last_message, 'tool_calls', []):
             error_type = detect_error_type(last_message)
             
-            # Si detectamos un error conocido
-            if error_type in ['tool_failure', 'validation', 'capability']:
+            # ✅ Si es 'success', NO es un error - resetear contadores
+            if error_type == 'success':
+                logger.info("✅ Tarea completada exitosamente por agente")
+                possible_error_detected = False
+                # Resetear contadores si había errores previos
+                if error_count > 0:
+                    logger.info("🔄 Reseteando contadores de error tras éxito")
+                    error_count = 0
+                    error_types = {}
+            
+            # ❌ Si detectamos un error real
+            elif error_type in ['tool_failure', 'validation', 'capability']:
                 possible_error_detected = True
                 error_count += 1
                 error_types[error_type] = error_types.get(error_type, 0) + 1
