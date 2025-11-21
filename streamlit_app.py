@@ -139,7 +139,7 @@ import os
 # HEADER Y STATUS
 # ========================================
 
-st.title("Compañero de estudio financiero")
+st.title("Compañero de estudio")
 st.caption("Con LangGraph, Claude 3.5 Haiku y RAG (Elasticsearch)")
 
 # Mostrar LangSmith status
