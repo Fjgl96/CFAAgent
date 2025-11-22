@@ -22,8 +22,8 @@ from config_elasticsearch import (
     get_es_config
 )
 
-# Importar API key de OpenAI desde config principal
-from config import OPENAI_API_KEY
+# Importar API key de OpenAI y LLM desde config principal
+from config import OPENAI_API_KEY, get_llm
 
 # ========================================
 # CLASE RAG ELASTICSEARCH
@@ -147,46 +147,73 @@ class FinancialRAGElasticsearch:
         filter_dict: dict = None
     ) -> List[Document]:
         """
-        Busca documentos similares a la query en Elasticsearch.
-        
+        Busca documentos similares a la query en Elasticsearch con búsqueda híbrida.
+        REFACTORIZADO para Self-Querying: vectorial + filtros estructurales.
+
         Args:
             query: Consulta de búsqueda
             k: Número de documentos a retornar
-            filter_dict: Filtros de metadata (ej: {"cfa_level": "I"})
-        
+            filter_dict: Filtros de metadata (ej: {"cfa_level": "I", "L1_Topic": "Fixed Income"})
+
         Returns:
             Lista de documentos relevantes
         """
         if k is None:
             k = self.k_results
-        
+
         # Verificar que esté conectado
         if self.vector_store is None:
             print("⚠️ No conectado a Elasticsearch. Intentando reconectar...")
             if not self._connect():
                 return []
-        
-        print(f"🔍 Buscando en Elasticsearch con OpenAI: '{query}' (top {k})")
-        
+
+        # Construir mensaje de búsqueda
+        search_msg = f"🔍 Búsqueda híbrida: '{query}' (top {k})"
+        if filter_dict:
+            # Convertir filtros a formato Elasticsearch (metadata.campo)
+            es_filters = []
+            for key, value in filter_dict.items():
+                es_filters.append({"term": {f"metadata.{key}": value}})
+
+            search_msg += f"\n   Filtros: {filter_dict}"
+
+        print(search_msg)
+
         try:
             # Búsqueda semántica con similarity_search
+            # LangChain ElasticsearchStore maneja automáticamente los filtros
             if filter_dict:
+                # Construir query dict para Elasticsearch
+                # ElasticsearchStore espera filtros en formato específico
                 results = self.vector_store.similarity_search(
                     query=query,
                     k=k,
-                    filter=filter_dict
+                    filter=filter_dict  # LangChain lo convierte a filtros ES internamente
                 )
             else:
                 results = self.vector_store.similarity_search(
                     query=query,
                     k=k
                 )
-            
+
+            if filter_dict and len(results) < k:
+                print(f"   ⚠️ Solo {len(results)} resultados con filtros (esperados {k})")
+                print(f"   💡 Considera ampliar los filtros si no hay suficientes resultados")
+
             print(f"✅ {len(results)} documentos encontrados")
             return results
-        
+
         except Exception as e:
             print(f"❌ Error en búsqueda: {e}")
+            # Fallback: si los filtros causan error, intentar sin ellos
+            if filter_dict:
+                print("   🔄 Reintentando sin filtros...")
+                try:
+                    results = self.vector_store.similarity_search(query=query, k=k)
+                    print(f"✅ {len(results)} documentos encontrados (sin filtros)")
+                    return results
+                except:
+                    return []
             return []
 
 
@@ -245,6 +272,119 @@ TERMINOS_TECNICOS = {
     "retorno": ["return", "retorno", "rendimiento", "expected return"],
 }
 
+
+# ========================================
+# SELF-QUERYING: EXTRACCIÓN DE FILTROS
+# ========================================
+
+def extraer_filtros_de_consulta(consulta: str) -> dict:
+    """
+    Usa el LLM para analizar la pregunta del usuario y extraer filtros estructurales.
+
+    Args:
+        consulta: Pregunta del usuario
+
+    Returns:
+        Diccionario con filtros detectados. Ejemplo:
+        {
+            "L1_Topic": "Quantitative Methods",
+            "L2_Reading": None,
+            "cfa_level": "I"
+        }
+    """
+    from pydantic import BaseModel, Field
+    from typing import Optional
+
+    # Esquema para structured output
+    class QueryFilters(BaseModel):
+        """Filtros extraídos de la consulta del usuario."""
+        L1_Topic: Optional[str] = Field(
+            None,
+            description="Tema principal del CFA (ej: 'Quantitative Methods', 'Fixed Income', 'Equity', 'Derivatives', 'Portfolio Management'). SOLO si el usuario lo menciona explícitamente."
+        )
+        L2_Reading: Optional[str] = Field(
+            None,
+            description="Lectura específica mencionada (ej: 'Time Value of Money', 'Duration and Convexity'). SOLO si el usuario la menciona explícitamente."
+        )
+        cfa_level: Optional[str] = Field(
+            None,
+            description="Nivel CFA mencionado: 'I', 'II' o 'III'. SOLO si el usuario lo especifica."
+        )
+
+    # Mapeo español → inglés para temas comunes
+    TOPIC_MAPPING = {
+        "métodos cuantitativos": "Quantitative Methods",
+        "quantitative methods": "Quantitative Methods",
+        "renta fija": "Fixed Income",
+        "fixed income": "Fixed Income",
+        "bonos": "Fixed Income",
+        "equity": "Equity",
+        "acciones": "Equity",
+        "derivados": "Derivatives",
+        "derivatives": "Derivatives",
+        "opciones": "Derivatives",
+        "portafolio": "Portfolio Management",
+        "portfolio": "Portfolio Management",
+        "gestión de portafolios": "Portfolio Management",
+        "finanzas corporativas": "Corporate Finance",
+        "corporate finance": "Corporate Finance"
+    }
+
+    try:
+        llm = get_llm()
+        llm_with_structure = llm.with_structured_output(QueryFilters)
+
+        prompt = f"""Analiza esta pregunta del usuario y extrae SOLO los filtros explícitamente mencionados:
+
+Pregunta: "{consulta}"
+
+INSTRUCCIONES CRÍTICAS:
+1. SOLO extrae un filtro si el usuario lo menciona EXPLÍCITAMENTE
+2. Si no hay mención explícita, devuelve None para ese campo
+3. Para L1_Topic, usa estos valores estándar si se mencionan:
+   - Quantitative Methods
+   - Fixed Income
+   - Equity
+   - Derivatives
+   - Portfolio Management
+   - Corporate Finance
+
+4. Para cfa_level, usa: "I", "II" o "III"
+
+EJEMPLOS:
+- "Explica el WACC" → Todos None (no menciona tema específico)
+- "Explica el WACC en Finanzas Corporativas" → L1_Topic="Corporate Finance"
+- "¿Qué es duration en renta fija?" → L1_Topic="Fixed Income"
+- "Bonos de nivel 1" → L1_Topic="Fixed Income", cfa_level="I"
+- "CAPM en nivel II" → L1_Topic="Portfolio Management", cfa_level="II"
+
+Extrae los filtros:"""
+
+        response = llm_with_structure.invoke(prompt)
+
+        # Convertir a diccionario
+        filters = {}
+        if response.L1_Topic:
+            # Normalizar con mapeo
+            normalized_topic = TOPIC_MAPPING.get(response.L1_Topic.lower(), response.L1_Topic)
+            filters["L1_Topic"] = normalized_topic
+        if response.L2_Reading:
+            filters["L2_Reading"] = response.L2_Reading
+        if response.cfa_level:
+            filters["cfa_level"] = response.cfa_level.upper()
+
+        if filters:
+            print(f"🔍 Filtros detectados: {filters}")
+        else:
+            print("🔍 No se detectaron filtros específicos (búsqueda abierta)")
+
+        return filters
+
+    except Exception as e:
+        print(f"⚠️ Error extrayendo filtros: {e}")
+        return {}
+
+
 def enriquecer_query_bilingue(consulta: str) -> str:
     """
     Enriquece la consulta agregando términos técnicos en inglés si se detectan en español.
@@ -285,6 +425,7 @@ def enriquecer_query_bilingue(consulta: str) -> str:
 def buscar_documentacion_financiera(consulta: str) -> str:
     """
     Busca información en material financiero indexado en Elasticsearch.
+    REFACTORIZADO con Self-Querying: extrae filtros de la pregunta automáticamente.
 
     Args:
         consulta: La pregunta o tema a buscar.
@@ -294,50 +435,79 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     """
     print(f"\n🔍 RAG Tool invocado con consulta: '{consulta}'")
 
-    # MEJORA: Enriquecer query con términos bilingües
+    # PASO 1: Extraer filtros estructurales de la consulta (Self-Querying)
+    filtros = extraer_filtros_de_consulta(consulta)
+
+    # PASO 2: Enriquecer query con términos bilingües
     consulta_enriquecida = enriquecer_query_bilingue(consulta)
 
-    # Buscar documentos relevantes con query enriquecida
-    docs = rag_system.search_documents(consulta_enriquecida, k=3)
-    
+    # PASO 3: Buscar documentos con búsqueda híbrida (vectorial + filtros)
+    docs = rag_system.search_documents(
+        consulta_enriquecida,
+        k=3,
+        filter_dict=filtros if filtros else None
+    )
+
     if not docs:
-        return (
+        mensaje_error = (
             "No encontré información relevante en el material de estudio indexado. "
             "Esto puede deberse a:\n"
             "1. El tema no está en el material indexado\n"
             "2. El índice no se ha generado aún en Elasticsearch\n"
             "3. Problema de conexión con Elasticsearch\n"
-            "4. La consulta necesita reformularse\n\n"
-            "Intenta reformular tu pregunta o consulta directamente al "
-            "agente especializado correspondiente."
         )
-    
-    # Formatear resultado
+
+        if filtros:
+            mensaje_error += (
+                f"4. Los filtros aplicados ({filtros}) son demasiado restrictivos\n\n"
+                "💡 Intenta reformular tu pregunta sin mencionar un tema/nivel específico."
+            )
+        else:
+            mensaje_error += (
+                "4. La consulta necesita reformularse\n\n"
+                "Intenta reformular tu pregunta o consulta directamente al "
+                "agente especializado correspondiente."
+            )
+
+        return mensaje_error
+
+    # PASO 4: Formatear resultado con metadatos estructurales
     context_parts = []
     for i, doc in enumerate(docs, 1):
         source = doc.metadata.get('source', 'Desconocido')
         content = doc.page_content.strip()
-        
+
         # Extraer nombre del archivo
         if source != 'Desconocido':
             from pathlib import Path
             source_name = Path(source).name
         else:
             source_name = source
-        
-        # Metadata adicional
+
+        # Metadata estructural
         cfa_level = doc.metadata.get('cfa_level', 'N/A')
-        
+        l1_topic = doc.metadata.get('L1_Topic', 'N/A')
+        l2_reading = doc.metadata.get('L2_Reading', 'N/A')
+        page_num = doc.metadata.get('page_number', 'N/A')
+
         context_parts.append(
             f"--- Fragmento {i} ---\n"
             f"Fuente: {source_name}\n"
             f"CFA Level: {cfa_level}\n"
+            f"Tema: {l1_topic}\n"
+            f"Lectura: {l2_reading}\n"
+            f"Página: {page_num}\n"
             f"Contenido:\n{content}"
         )
-    
+
     full_context = "\n\n".join(context_parts)
 
-    return f"📚 Información encontrada en el material de estudio:\n\n{full_context}"
+    # Mostrar filtros aplicados en la respuesta
+    filtros_msg = ""
+    if filtros:
+        filtros_msg = f"\n\n🔍 Filtros aplicados: {filtros}"
+
+    return f"📚 Información encontrada en el material de estudio:{filtros_msg}\n\n{full_context}"
 
 
 print("✅ Módulo financial_rag_elasticsearch cargado (LangChain 1.0, OpenAI Embeddings).")
