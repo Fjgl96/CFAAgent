@@ -28,6 +28,7 @@ langchain-elasticsearch>=0.3.0
 # Document Loaders
 # ========================================
 pypdf>=5.0.0
+pymupdf>=1.24.0
 unstructured>=0.16.0
 
 # ========================================

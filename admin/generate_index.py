@@ -114,34 +114,79 @@ def check_prerequisites():
 
 
 def load_documents():
-    """Carga todos los documentos."""
-    print_header("Cargando Documentos")
-    
-    from langchain_community.document_loaders import (
-        DirectoryLoader,
-        TextLoader,
-        PyPDFLoader,
-    )
-    
+    """
+    Carga todos los documentos con metadatos estructurales.
+    REFACTORIZADO para usar PyMuPDF y extraer ToC.
+    """
+    print_header("Cargando Documentos con Structural Chunking")
+
+    import fitz  # PyMuPDF
+    from langchain_core.documents import Document
+
     all_docs = []
-    
-    # PDFs
-    print("📄 Cargando PDFs...")
-    try:
-        pdf_loader = DirectoryLoader(
-            str(BOOKS_DIR),
-            glob="**/*.pdf",
-            loader_cls=PyPDFLoader,
-            show_progress=True
-        )
-        pdf_docs = pdf_loader.load()
-        all_docs.extend(pdf_docs)
-        print(f"✅ {len(pdf_docs)} PDFs cargados\n")
-    except Exception as e:
-        print(f"⚠️  Error cargando PDFs: {e}\n")
-    
-    # TXTs
-    print("📝 Cargando archivos TXT...")
+
+    # PDFs con structural chunking
+    print("📄 Cargando PDFs con extracción de estructura...\n")
+    pdf_files = list(BOOKS_DIR.rglob("*.pdf"))
+
+    if not pdf_files:
+        print("⚠️  No se encontraron PDFs\n")
+
+    for pdf_path in pdf_files:
+        try:
+            print(f"   📖 Procesando: {pdf_path.name}")
+
+            # 1. Extraer ToC
+            toc = extract_toc_from_pdf(str(pdf_path))
+
+            # 2. Abrir PDF con PyMuPDF
+            doc = fitz.open(str(pdf_path))
+            total_pages = doc.page_count
+
+            # 3. Construir mapeo página → estructura
+            page_map = build_page_to_structure_map(toc, total_pages)
+
+            # 4. Extraer CFA Level del nombre del archivo
+            cfa_level = extract_cfa_level_from_filename(str(pdf_path))
+
+            # 5. Leer página por página
+            for page_num in range(total_pages):
+                page = doc[page_num]
+                text = page.get_text("text")
+
+                # Saltar páginas vacías
+                if not text.strip():
+                    continue
+
+                # Obtener estructura de esta página
+                page_structure = page_map.get(page_num + 1, {
+                    "L1_Topic": "Unknown Topic",
+                    "L2_Reading": "Unknown Reading"
+                })
+
+                # Crear documento con metadatos enriquecidos
+                metadata = {
+                    "source": str(pdf_path),
+                    "page_number": page_num + 1,
+                    "cfa_level": cfa_level,
+                    "L1_Topic": page_structure["L1_Topic"],
+                    "L2_Reading": page_structure["L2_Reading"]
+                }
+
+                lang_doc = Document(page_content=text, metadata=metadata)
+                all_docs.append(lang_doc)
+
+            doc.close()
+            print(f"   ✅ {total_pages} páginas procesadas con estructura jerárquica\n")
+
+        except Exception as e:
+            print(f"   ❌ Error procesando {pdf_path.name}: {e}\n")
+            continue
+
+    # TXTs (sin estructura, solo metadata básica)
+    print("📝 Cargando archivos TXT (sin estructura)...")
+    from langchain_community.document_loaders import DirectoryLoader, TextLoader
+
     try:
         txt_loader = DirectoryLoader(
             str(BOOKS_DIR),
@@ -150,52 +195,71 @@ def load_documents():
             show_progress=True
         )
         txt_docs = txt_loader.load()
+
+        # Agregar metadata básica a TXTs
+        for txt_doc in txt_docs:
+            txt_doc.metadata["cfa_level"] = extract_cfa_level_from_filename(txt_doc.metadata.get("source", ""))
+            txt_doc.metadata["L1_Topic"] = "Unknown Topic"
+            txt_doc.metadata["L2_Reading"] = "Unknown Reading"
+            txt_doc.metadata["page_number"] = 0
+
         all_docs.extend(txt_docs)
         print(f"✅ {len(txt_docs)} TXTs cargados\n")
     except Exception as e:
         print(f"⚠️  Error cargando TXTs: {e}\n")
-    
-    print(f"📚 TOTAL DOCUMENTOS CARGADOS: {len(all_docs)}\n")
+
+    print(f"📚 TOTAL DOCUMENTOS CARGADOS: {len(all_docs)}")
+    print(f"   - Con estructura jerárquica: {len([d for d in all_docs if d.metadata.get('L1_Topic') != 'Unknown Topic'])}")
+    print(f"   - Sin estructura: {len([d for d in all_docs if d.metadata.get('L1_Topic') == 'Unknown Topic'])}\n")
+
     return all_docs
 
 
 def split_documents(documents):
-    """Divide documentos en chunks."""
-    print_header("Dividiendo Documentos en Chunks")
-    
+    """
+    Divide documentos en chunks preservando metadatos estructurales.
+    REFACTORIZADO para mantener L1_Topic, L2_Reading, page_number, cfa_level.
+    """
+    print_header("Dividiendo Documentos en Chunks (Preservando Estructura)")
+
     from langchain.text_splitter import RecursiveCharacterTextSplitter
-    
+
     print(f"✂️  Configuración:")
     print(f"   Chunk size: {CHUNK_SIZE}")
     print(f"   Overlap: {CHUNK_OVERLAP}\n")
-    
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
         length_function=len,
         separators=["\n\n## ", "\n\n### ", "\n\n", "\n", ". ", " ", ""]
     )
-    
+
     chunks = text_splitter.split_documents(documents)
-    
-    # Añadir metadata adicional
+
+    # Añadir metadata adicional y preservar estructura
     for i, chunk in enumerate(chunks):
-        source = chunk.metadata.get('source', '')
-        
-        # Detectar Level CFA
-        if 'Level_I' in source or 'Level_1' in source:
-            chunk.metadata['cfa_level'] = 'I'
-        elif 'Level_II' in source or 'Level_2' in source:
-            chunk.metadata['cfa_level'] = 'II'
-        elif 'Level_III' in source or 'Level_3' in source:
-            chunk.metadata['cfa_level'] = 'III'
-        
+        # Los metadatos L1_Topic, L2_Reading, page_number, cfa_level
+        # ya vienen del documento original, solo añadimos chunk_id e indexed_at
+
+        # Asegurar que existan los campos estructurales (por si acaso)
+        chunk.metadata.setdefault('L1_Topic', 'Unknown Topic')
+        chunk.metadata.setdefault('L2_Reading', 'Unknown Reading')
+        chunk.metadata.setdefault('page_number', 0)
+        chunk.metadata.setdefault('cfa_level', 'Unknown')
+
+        # Agregar identificadores de chunk
         chunk.metadata['chunk_id'] = f"chunk_{i+1}"
         chunk.metadata['indexed_at'] = datetime.now().isoformat()
-    
+
     print(f"✅ {len(chunks)} chunks creados")
-    print(f"   Promedio: {len(chunks) / max(len(documents), 1):.1f} chunks por documento\n")
-    
+    print(f"   Promedio: {len(chunks) / max(len(documents), 1):.1f} chunks por documento")
+
+    # Estadísticas de estructura
+    chunks_with_structure = len([c for c in chunks if c.metadata.get('L1_Topic') != 'Unknown Topic'])
+    print(f"   Con estructura jerárquica: {chunks_with_structure} chunks")
+    print(f"   Sin estructura: {len(chunks) - chunks_with_structure} chunks\n")
+
     return chunks
 
 
@@ -216,9 +280,9 @@ def create_or_recreate_index(es_client):
             print("ℹ️  Los documentos se añadirán al índice existente")
             return
     
-    # Crear índice con mapping para vectores densos
-    print(f"🔨 Creando índice '{ES_INDEX_NAME}'...")
-    
+    # Crear índice con mapping para vectores densos + metadatos estructurales
+    print(f"🔨 Creando índice '{ES_INDEX_NAME}' con campos estructurales...")
+
     index_mapping = {
         "mappings": {
             "properties": {
@@ -229,13 +293,30 @@ def create_or_recreate_index(es_client):
                     "index": True,
                     "similarity": "cosine"
                 },
-                "metadata": {"type": "object"}
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        # Campos estructurales para filtrado (keyword = exacto)
+                        "L1_Topic": {"type": "keyword"},
+                        "L2_Reading": {"type": "keyword"},
+                        "cfa_level": {"type": "keyword"},
+                        "page_number": {"type": "integer"},
+                        # Campos adicionales
+                        "source": {"type": "keyword"},
+                        "chunk_id": {"type": "keyword"},
+                        "indexed_at": {"type": "date"}
+                    }
+                }
             }
         }
     }
-    
+
     es_client.indices.create(index=ES_INDEX_NAME, body=index_mapping)
-    print(f"✅ Índice '{ES_INDEX_NAME}' creado\n")
+    print(f"✅ Índice '{ES_INDEX_NAME}' creado con campos estructurales:")
+    print(f"   - L1_Topic (keyword)")
+    print(f"   - L2_Reading (keyword)")
+    print(f"   - cfa_level (keyword)")
+    print(f"   - page_number (integer)\n")
 
 
 def estimate_tokens(text: str) -> int:
@@ -244,6 +325,116 @@ def estimate_tokens(text: str) -> int:
     Aproximación: ~4 caracteres = 1 token para inglés.
     """
     return len(text) // 4
+
+
+# ========================================
+# FUNCIONES PARA STRUCTURAL CHUNKING
+# ========================================
+
+def extract_toc_from_pdf(pdf_path: str) -> list:
+    """
+    Extrae el Table of Contents (ToC) de un PDF usando PyMuPDF.
+
+    Args:
+        pdf_path: Ruta al archivo PDF
+
+    Returns:
+        Lista de tuplas (nivel, titulo, pagina_inicio)
+        Ejemplo: [(1, "Quantitative Methods", 10), (2, "Time Value of Money", 15), ...]
+    """
+    import fitz  # PyMuPDF
+
+    try:
+        doc = fitz.open(pdf_path)
+        toc = doc.get_toc()  # Retorna: [[nivel, titulo, pagina], ...]
+        doc.close()
+
+        if not toc:
+            print(f"   ⚠️  PDF sin ToC extraíble: {Path(pdf_path).name}")
+            return []
+
+        # Convertir a formato más manejable
+        structured_toc = [(level, title.strip(), page) for level, title, page in toc]
+        print(f"   ✅ ToC extraído: {len(structured_toc)} entradas para {Path(pdf_path).name}")
+        return structured_toc
+
+    except Exception as e:
+        print(f"   ❌ Error extrayendo ToC de {Path(pdf_path).name}: {e}")
+        return []
+
+
+def build_page_to_structure_map(toc: list, total_pages: int) -> dict:
+    """
+    Construye un mapeo de número de página a estructura jerárquica.
+
+    Args:
+        toc: Lista de tuplas (nivel, titulo, pagina_inicio) del ToC
+        total_pages: Total de páginas del PDF
+
+    Returns:
+        Diccionario {pagina: {"L1_Topic": str, "L2_Reading": str}}
+
+    Lógica:
+        - Nivel 1 = L1_Topic (Tema principal)
+        - Nivel 2 = L2_Reading (Lectura específica)
+        - Cada página hereda el L1_Topic y L2_Reading más reciente
+    """
+    import fitz  # PyMuPDF
+
+    if not toc:
+        return {}
+
+    page_map = {}
+    current_l1 = "Unknown Topic"
+    current_l2 = "Unknown Reading"
+
+    # Ordenar ToC por página
+    toc_sorted = sorted(toc, key=lambda x: x[2])
+
+    # Crear índice para iterar
+    toc_index = 0
+
+    for page_num in range(1, total_pages + 1):
+        # Actualizar L1/L2 si hay una entrada del ToC en esta página
+        while toc_index < len(toc_sorted) and toc_sorted[toc_index][2] <= page_num:
+            level, title, _ = toc_sorted[toc_index]
+
+            if level == 1:
+                current_l1 = title
+                current_l2 = "Unknown Reading"  # Reset L2 al cambiar de tema
+            elif level == 2:
+                current_l2 = title
+
+            toc_index += 1
+
+        page_map[page_num] = {
+            "L1_Topic": current_l1,
+            "L2_Reading": current_l2
+        }
+
+    return page_map
+
+
+def extract_cfa_level_from_filename(filepath: str) -> str:
+    """
+    Extrae el CFA Level del nombre del archivo.
+
+    Args:
+        filepath: Ruta al archivo
+
+    Returns:
+        CFA Level ("I", "II", "III") o "Unknown"
+    """
+    filename = Path(filepath).name
+
+    if 'Level_I' in filename or 'Level_1' in filename or 'Level-I' in filename:
+        return 'I'
+    elif 'Level_II' in filename or 'Level_2' in filename or 'Level-II' in filename:
+        return 'II'
+    elif 'Level_III' in filename or 'Level_3' in filename or 'Level-III' in filename:
+        return 'III'
+    else:
+        return 'Unknown'
 
 
 def create_batches(chunks, max_tokens_per_batch=250000):
