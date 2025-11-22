@@ -62,9 +62,9 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 
 def nodo_rag(state: dict) -> dict:
-    """Nodo que consulta material financiero usando RAG."""
-    logger.info("📚 Agente RAG invocado")
-    
+    """Nodo que consulta material financiero usando RAG con estrategia HyDE."""
+    logger.info("📚 Agente RAG invocado (con HyDE)")
+
     # Extraer última pregunta del usuario
     messages = state.get("messages", [])
     if not messages:
@@ -72,33 +72,81 @@ def nodo_rag(state: dict) -> dict:
         return {
             "messages": [AIMessage(content="Error: No hay mensajes en el estado.")]
         }
-    
-    last_message = messages[-1]
-    
-    # Extraer contenido
-    if hasattr(last_message, 'content'):
-        consulta = last_message.content
-    else:
-        consulta = str(last_message)
-    
-    logger.info(f"🔍 Consulta financiera: {consulta[:100]}...")
 
-    # Buscar en material financiero usando RAG
+    last_message = messages[-1]
+
+    # Extraer contenido de la consulta original
+    if hasattr(last_message, 'content'):
+        consulta_original = last_message.content
+    else:
+        consulta_original = str(last_message)
+
+    logger.info(f"🔍 Consulta financiera original: {consulta_original[:100]}...")
+
+    # ========================================
+    # PASO A: GENERACIÓN HYDE
+    # ========================================
     try:
-        resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
-        logger.info("✅ Respuesta RAG generada")
+        logger.debug("🧠 Generando respuesta hipotética con HyDE...")
+
+        # Formatear el prompt HyDE con la consulta del usuario
+        hyde_prompt_texto = PROMPT_HYDE.format(consulta=consulta_original)
+
+        # Invocar LLM para generar la respuesta hipotética
+        respuesta_hyde_raw = llm.invoke(hyde_prompt_texto)
+
+        # Extraer el contenido de la respuesta
+        if hasattr(respuesta_hyde_raw, 'content'):
+            respuesta_hipotetica = respuesta_hyde_raw.content
+        else:
+            respuesta_hipotetica = str(respuesta_hyde_raw)
+
+        # ========================================
+        # PASO B: LOGGING DE LA RESPUESTA HIPOTÉTICA
+        # ========================================
+        logger.info(f"✨ Respuesta hipotética HyDE generada ({len(respuesta_hipotetica)} chars)")
+        logger.debug(f"📝 Contenido HyDE: {respuesta_hipotetica[:200]}...")
+
+        # ========================================
+        # PASO C: BÚSQUEDA MEJORADA CON HYDE
+        # ========================================
+        # Usar la respuesta hipotética como consulta para el RAG
+        # (enfoque HyDE puro: embeddings de respuesta hipotética son más cercanos a los documentos)
+        consulta_hyde = respuesta_hipotetica
+
+        logger.debug("🔎 Buscando en RAG con consulta HyDE...")
+        resultado = buscar_documentacion_financiera.invoke({"consulta": consulta_hyde})
+        logger.info("✅ Respuesta RAG generada con HyDE exitosamente")
 
         return {
             "messages": [AIMessage(content=resultado)]
         }
 
-    except Exception as e:
-        logger.error(f"❌ Error en RAG: {e}", exc_info=True)
-        return {
-            "messages": [AIMessage(
-                content=f"Error al buscar en el material de estudio: {e}"
-            )]
-        }
+    except Exception as e_hyde:
+        # ========================================
+        # PASO 3: MANEJO DE ERRORES - FALLBACK
+        # ========================================
+        logger.warning(
+            f"⚠️ Error en generación HyDE, haciendo fallback a consulta original: {e_hyde}"
+        )
+
+        # Intentar búsqueda RAG directa con la consulta original (sin HyDE)
+        try:
+            logger.debug("🔄 Ejecutando búsqueda RAG sin HyDE (fallback)...")
+            resultado = buscar_documentacion_financiera.invoke({"consulta": consulta_original})
+            logger.info("✅ Respuesta RAG generada (modo fallback sin HyDE)")
+
+            return {
+                "messages": [AIMessage(content=resultado)]
+            }
+
+        except Exception as e_rag:
+            logger.error(f"❌ Error crítico en RAG (incluso en fallback): {e_rag}", exc_info=True)
+            return {
+                "messages": [AIMessage(
+                    content=f"Error al buscar en el material de estudio: {e_rag}"
+                )]
+            }
 
 
 # ========================================
@@ -224,6 +272,27 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 # ========================================
 # PROMPTS DE AGENTES ESPECIALISTAS
 # ========================================
+
+PROMPT_HYDE = """Eres un experto certificado CFA (Chartered Financial Analyst) con dominio completo del curriculum oficial del CFA Institute.
+
+**TU ÚNICA TAREA:**
+Redactar un pasaje teórico breve y técnicamente denso que respondería idealmente a la pregunta planteada.
+
+**INSTRUCCIONES CRÍTICAS:**
+- NO saludes, NO uses frases introductorias, NO digas "La respuesta es..."
+- Genera DIRECTAMENTE el contenido teórico como si fuera un fragmento extraído del CFA curriculum
+- Usa terminología técnica precisa y oficial del CFA Level I, II o III según corresponda
+- Escribe en un estilo académico y profesional
+- Sé conciso pero completo (2-4 párrafos máximo)
+- Incluye conceptos clave, fórmulas mencionadas (sin derivar), y relaciones importantes
+
+**FORMATO DE SALIDA:**
+Escribe ÚNICAMENTE el pasaje teórico. Sin preámbulos, sin conclusiones meta.
+
+**PREGUNTA:**
+{consulta}
+
+**PASAJE TEÓRICO:**"""
 
 PROMPT_SINTESIS_RAG = """Eres un asistente financiero experto y tutor especializado en finanzas.
 
