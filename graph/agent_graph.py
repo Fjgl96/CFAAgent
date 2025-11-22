@@ -15,7 +15,12 @@ import streamlit as st
 from datetime import datetime
 
 # Importar de config
-from config import CIRCUIT_BREAKER_MAX_RETRIES, CIRCUIT_BREAKER_COOLDOWN
+from config import (
+    CIRCUIT_BREAKER_MAX_RETRIES,
+    CIRCUIT_BREAKER_COOLDOWN,
+    ENABLE_POSTGRES_PERSISTENCE,
+    get_postgres_uri
+)
 
 # Importar nodos de agente y supervisor
 from agents.financial_agents import (
@@ -370,46 +375,61 @@ def supervisor_node(state: AgentState) -> dict:
 # ========================================
 
 def build_graph():
-    """Construye y compila el grafo LangGraph."""
+    """
+    Construye y compila el grafo LangGraph con persistencia configurable.
+
+    PERSISTENCIA (S26 Pattern):
+    - ENABLE_POSTGRES_PERSISTENCE=true → PostgresSaver (persistente, producción)
+    - ENABLE_POSTGRES_PERSISTENCE=false → MemorySaver (volátil, desarrollo)
+
+    VENTAJAS PostgreSQL:
+    1. Conversaciones sobreviven a reinicios
+    2. Múltiples sesiones concurrentes
+    3. Historial completo para análisis
+    4. Rollback a checkpoints anteriores
+
+    Returns:
+        Grafo compilado con checkpointer configurado
+    """
     logger.info("🏗️ Construyendo grafo de agentes...")
-    
+
     workflow = StateGraph(AgentState)
-    
+
     # Añadir nodo supervisor
     workflow.add_node("Supervisor", supervisor_node)
     logger.debug("   Nodo 'Supervisor' agregado")
-    
+
     # Añadir nodos de agentes
     for name, node in agent_nodes.items():
         workflow.add_node(name, node)
         logger.debug(f"   Nodo '{name}' agregado")
-    
+
     # Establecer punto de entrada
     workflow.set_entry_point("Supervisor")
-    
+
     # Función de enrutamiento condicional
     def conditional_router(state: AgentState) -> str:
         """Enruta basado en la decisión del supervisor."""
         node_to_go = state.get("next_node")
         valid_nodes = list(agent_nodes.keys()) + ["FINISH"]
-        
+
         if node_to_go not in valid_nodes:
             logger.warning(f"⚠️ Destino inválido '{node_to_go}'. Forzando FINISH.")
             return "FINISH"
-        
+
         logger.debug(f"🚦 Enrutando a: {node_to_go}")
         return node_to_go
-    
+
     # Crear mapeo para aristas condicionales
     conditional_map = {name: name for name in agent_nodes}
     conditional_map["FINISH"] = END
-    
+
     workflow.add_conditional_edges(
         "Supervisor",
         conditional_router,
         conditional_map
     )
-    
+
     # Aristas de retorno: agentes → supervisor
     for name in agent_nodes:
         if name in ["Agente_Ayuda", "Agente_Sintesis_RAG"]:
@@ -424,13 +444,75 @@ def build_graph():
             # Agentes normales vuelven al supervisor
             workflow.add_edge(name, "Supervisor")
             logger.debug(f"   {name} → Supervisor")
-    
-    # Compilar con checkpointer
-    memory = MemorySaver()
+
+    # ========================================
+    # CONFIGURAR CHECKPOINTER (S26 Pattern)
+    # ========================================
+
+    checkpointer = None
+
+    if ENABLE_POSTGRES_PERSISTENCE:
+        # Usar PostgreSQL para persistencia (Producción)
+        logger.info("🔧 Configurando persistencia PostgreSQL (S26)...")
+
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+            import psycopg_pool
+
+            postgres_uri = get_postgres_uri()
+            logger.info(f"   URI: {postgres_uri.split('@')[0]}@***")  # Ocultar credenciales
+
+            # Configuración de conexión
+            connection_kwargs = {
+                "autocommit": True,
+                "prepare_threshold": 0
+            }
+
+            # Crear connection pool
+            pool = psycopg_pool.ConnectionPool(
+                conninfo=postgres_uri,
+                kwargs=connection_kwargs,
+                min_size=1,
+                max_size=10,
+                timeout=30.0
+            )
+
+            # Crear PostgresSaver
+            checkpointer = PostgresSaver(pool)
+
+            # Inicializar tablas si no existen
+            checkpointer.setup()
+
+            logger.info("✅ PostgreSQL Checkpointer configurado")
+            logger.info("   - Memoria persistente habilitada")
+            logger.info("   - Conversaciones sobreviven reinicios")
+
+        except ImportError as e:
+            logger.error(f"❌ Error: psycopg o langgraph.checkpoint.postgres no instalado: {e}")
+            logger.warning("⚠️ Fallback a MemorySaver (memoria volátil)")
+            checkpointer = MemorySaver()
+
+        except Exception as e:
+            logger.error(f"❌ Error configurando PostgreSQL: {e}", exc_info=True)
+            logger.warning("⚠️ Fallback a MemorySaver (memoria volátil)")
+            checkpointer = MemorySaver()
+
+    else:
+        # Usar MemorySaver (Desarrollo)
+        logger.info("🔧 Configurando MemorySaver (desarrollo)")
+        logger.warning("⚠️ Memoria volátil - conversaciones no persisten después de reinicio")
+        checkpointer = MemorySaver()
+
+    # Compilar grafo con checkpointer
     try:
-        compiled_graph = workflow.compile(checkpointer=memory)
-        logger.info("✅ Grafo compilado correctamente con MemorySaver")
+        compiled_graph = workflow.compile(checkpointer=checkpointer)
+
+        if ENABLE_POSTGRES_PERSISTENCE and isinstance(checkpointer, MemorySaver):
+            logger.warning("⚠️ PostgreSQL solicitado pero no disponible - usando MemorySaver")
+
+        logger.info("✅ Grafo compilado correctamente")
         return compiled_graph
+
     except Exception as e:
         logger.error(f"❌ Error crítico al compilar grafo: {e}", exc_info=True)
         raise e
