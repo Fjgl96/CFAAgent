@@ -168,6 +168,18 @@ LLM_TEMPERATURE = 0.0 # Tu temperatura original era 0.1, 0.0 es mejor para agent
 
 _llm_instance = None
 
+# ========================================
+# CACHE CONFIGURATION
+# ========================================
+
+# Habilitar cache in-memory para reducir latencia
+from langchain.globals import set_llm_cache
+from langchain.cache import InMemoryCache
+
+# Inicializar cache in-memory
+set_llm_cache(InMemoryCache())
+print("✅ Cache de LLM habilitado (InMemoryCache)")
+
 # --- ¡AQUÍ ESTÁ LA NUEVA FUNCIÓN 'get_llm'! ---
 def get_llm():
     """
@@ -191,11 +203,13 @@ def get_llm():
     try:
         if not ANTHROPIC_API_KEY:
             raise AnthropicAuthError("ANTHROPIC_API_KEY no encontrada.")
-            
+
         llm_primary = ChatAnthropic(
             model=LLM_MODEL_PRIMARY,
             temperature=LLM_TEMPERATURE,
-            api_key=ANTHROPIC_API_KEY
+            api_key=ANTHROPIC_API_KEY,
+            timeout=30.0,  # Timeout de 30 segundos
+            max_retries=2  # Reintentar hasta 2 veces
         )
         llm_primary.invoke("Ping test") # Validar la key
         
@@ -208,11 +222,13 @@ def get_llm():
     try:
         if not OPENAI_API_KEY:
             raise OpenAIAuthError("OPENAI_API_KEY no encontrada.")
-            
+
         llm_fallback = ChatOpenAI(
             model=LLM_MODEL_FALLBACK,
             temperature=LLM_TEMPERATURE,
-            api_key=OPENAI_API_KEY
+            api_key=OPENAI_API_KEY,
+            timeout=30.0,  # Timeout de 30 segundos
+            max_retries=2  # Reintentar hasta 2 veces
         )
         llm_fallback.invoke("Ping test") # Validar la key
         

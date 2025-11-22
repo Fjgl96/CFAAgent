@@ -124,23 +124,20 @@ def should_open_circuit(error_types: dict, error_count: int) -> bool:
 
 
 # ========================================
-# NODO SUPERVISOR (CON CIRCUIT BREAKER INTELIGENTE)
+# NODO SUPERVISOR - FUNCIONES HELPER
 # ========================================
 
-def supervisor_node(state: AgentState) -> dict:
+def _check_circuit_breaker_status(state: AgentState) -> dict:
     """
-    Nodo del supervisor que decide el siguiente paso.
-    Implementa circuit breaker inteligente con tracking de tipos de error.
+    Verifica el estado del circuit breaker.
+
+    Returns:
+        Dict con error_msg y should_stop si está activado, None si no
     """
-    logger.info("--- SUPERVISOR ---")
-    
-    # Extraer estado actual
+    circuit_open = state.get('circuit_open', False)
     error_count = state.get('error_count', 0)
     error_types = state.get('error_types', {})
-    circuit_open = state.get('circuit_open', False)
-    messages = state['messages']
-    
-    # Si el circuito está abierto, no continuar
+
     if circuit_open:
         logger.error("⛔ Circuit breaker ACTIVADO - finalizando ejecución")
         error_msg = (
@@ -159,107 +156,110 @@ def supervisor_node(state: AgentState) -> dict:
             "next_node": "FINISH",
             "circuit_open": True
         }
-    
-    # ========================================
-    # ANÁLISIS DEL ÚLTIMO MENSAJE
-    # ========================================
-    
+
+    return None
+
+
+def _analyze_last_message(messages: list) -> tuple:
+    """
+    Analiza el último mensaje para detectar errores.
+
+    Returns:
+        (possible_error_detected, error_type, error_count_delta, error_types_update)
+    """
     possible_error_detected = False
     error_type = None
-    
+    error_count_delta = 0
+    error_types_update = {}
+
     if messages and isinstance(messages[-1], AIMessage):
         last_message = messages[-1]
-        
+
         # Solo revisar mensajes finales (no tool calls intermedios)
         if not getattr(last_message, 'tool_calls', []):
             error_type = detect_error_type(last_message)
-            
-            # ✅ Si es 'success', NO es un error - resetear contadores
+
+            # ✅ Si es 'success', NO es un error
             if error_type == 'success':
                 logger.info("✅ Tarea completada exitosamente por agente")
                 possible_error_detected = False
-                # Resetear contadores si había errores previos
-                if error_count > 0:
-                    logger.info("🔄 Reseteando contadores de error tras éxito")
-                    error_count = 0
-                    error_types = {}
-            
+
             # ❌ Si detectamos un error real
             elif error_type in ['tool_failure', 'validation', 'capability']:
                 possible_error_detected = True
-                error_count += 1
-                error_types[error_type] = error_types.get(error_type, 0) + 1
-                
-                logger.warning(
-                    f"⚠️ Error detectado - Tipo: {error_type} | "
-                    f"Total: {error_count} | Por tipo: {error_types}"
-                )
-    
-    # ========================================
-    # VERIFICAR SI ABRIR CIRCUIT BREAKER
-    # ========================================
-    
-    if possible_error_detected and should_open_circuit(error_types, error_count):
-        circuit_open = True
-        
-        # Mensaje personalizado según tipo de error dominante
-        max_error_type = max(error_types, key=error_types.get) if error_types else 'unknown'
-        
-        if max_error_type == 'validation':
-            error_msg = (
-                "⚠️ **Información Incompleta**\n\n"
-                "He intentado procesar tu solicitud varias veces, pero faltan parámetros necesarios.\n\n"
-                "**Por favor, proporciona:**\n"
-                "- Todos los valores numéricos requeridos\n"
-                "- Especifica claramente qué quieres calcular\n"
-                "- Revisa que los valores estén en el formato correcto\n\n"
-                "Ejemplo válido: *'Calcula VAN: inversión 100k, flujos [30k, 40k, 50k], tasa 10%'*"
-            )
-        elif max_error_type == 'tool_failure':
-            error_msg = (
-                "🔧 **Error de Sistema**\n\n"
-                "Las herramientas de cálculo están experimentando problemas técnicos.\n\n"
-                "**Acciones sugeridas:**\n"
-                "1. Intenta de nuevo en unos momentos\n"
-                "2. Verifica tu conexión a internet\n"
-                "3. Si el problema persiste, contacta al administrador\n\n"
-                f"Errores registrados: {error_types}"
-            )
-        else:
-            error_msg = (
-                "❌ **Procesamiento Detenido**\n\n"
-                f"No pude completar tu solicitud después de {error_count} intentos.\n\n"
-                "**Intenta:**\n"
-                "1. Reformular tu pregunta de manera más específica\n"
-                "2. Dividir tu consulta en pasos más simples\n"
-                "3. Usar el comando 'Ayuda' para ver ejemplos\n\n"
-                f"Tipos de error: {error_types}"
-            )
-        
-        return {
-            "messages": [AIMessage(content=error_msg)],
-            "next_node": "FINISH",
-            "error_count": error_count,
-            "error_types": error_types,
-            "circuit_open": True
-        }
-    
-    # ========================================
-    # ENRUTAMIENTO (LANGCHAIN-NATIVE)
-    # ========================================
+                error_count_delta = 1
+                error_types_update[error_type] = 1
 
-    next_node_decision = "FINISH"  # Default
+                logger.warning(
+                    f"⚠️ Error detectado - Tipo: {error_type}"
+                )
+
+    return possible_error_detected, error_type, error_count_delta, error_types_update
+
+
+def _handle_circuit_breaker_activation(error_types: dict, error_count: int) -> dict:
+    """
+    Maneja la activación del circuit breaker si es necesario.
+
+    Returns:
+        Dict con respuesta de error si se activa, None si no
+    """
+    max_error_type = max(error_types, key=error_types.get) if error_types else 'unknown'
+
+    if max_error_type == 'validation':
+        error_msg = (
+            "⚠️ **Información Incompleta**\n\n"
+            "He intentado procesar tu solicitud varias veces, pero faltan parámetros necesarios.\n\n"
+            "**Por favor, proporciona:**\n"
+            "- Todos los valores numéricos requeridos\n"
+            "- Especifica claramente qué quieres calcular\n"
+            "- Revisa que los valores estén en el formato correcto\n\n"
+            "Ejemplo válido: *'Calcula VAN: inversión 100k, flujos [30k, 40k, 50k], tasa 10%'*"
+        )
+    elif max_error_type == 'tool_failure':
+        error_msg = (
+            "🔧 **Error de Sistema**\n\n"
+            "Las herramientas de cálculo están experimentando problemas técnicos.\n\n"
+            "**Acciones sugeridas:**\n"
+            "1. Intenta de nuevo en unos momentos\n"
+            "2. Verifica tu conexión a internet\n"
+            "3. Si el problema persiste, contacta al administrador\n\n"
+            f"Errores registrados: {error_types}"
+        )
+    else:
+        error_msg = (
+            "❌ **Procesamiento Detenido**\n\n"
+            f"No pude completar tu solicitud después de {error_count} intentos.\n\n"
+            "**Intenta:**\n"
+            "1. Reformular tu pregunta de manera más específica\n"
+            "2. Dividir tu consulta en pasos más simples\n"
+            "3. Usar el comando 'Ayuda' para ver ejemplos\n\n"
+            f"Tipos de error: {error_types}"
+        )
+
+    return {
+        "messages": [AIMessage(content=error_msg)],
+        "next_node": "FINISH",
+        "circuit_open": True
+    }
+
+
+def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
+    """
+    Ejecuta la lógica de routing.
+
+    Returns:
+        (next_node_decision, routing_method, routing_confidence)
+    """
+    next_node_decision = "FINISH"
     routing_method = "unknown"
     routing_confidence = 0.0
 
     try:
-        # Usar nodo de routing (LangChain Runnables)
         global ROUTING_NODE
 
         if ROUTING_NODE:
-            # Ejecutar nodo de routing (usa RunnableBranch internamente)
             result = ROUTING_NODE(state)
-
             next_node_decision = result.get('next_node', 'FINISH')
             routing_method = result.get('routing_method', 'unknown')
             routing_confidence = result.get('routing_confidence', 0.0)
@@ -269,9 +269,9 @@ def supervisor_node(state: AgentState) -> dict:
                 f"(method={routing_method}, conf={routing_confidence:.2f})"
             )
         else:
-            # Fallback a supervisor directo (si routing no está inicializado)
             logger.warning("⚠️ ROUTING_NODE no inicializado, usando supervisor directo")
 
+            from agents.financial_agents import supervisor_llm, supervisor_system_prompt, RouterSchema
             supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
             route: RouterSchema = supervisor_llm.invoke(supervisor_messages)
 
@@ -288,32 +288,78 @@ def supervisor_node(state: AgentState) -> dict:
 
     except Exception as e:
         logger.error(f"❌ Error en routing: {e}", exc_info=True)
+        import streamlit as st
         st.warning(f"Advertencia: El routing falló ({e}). Finalizando.")
         next_node_decision = "FINISH"
         routing_method = "error_fallback"
         routing_confidence = 0.0
-    
-    # ========================================
-    # RESETEAR CONTADOR SI TIENE ÉXITO
-    # ========================================
-    
+
+    return next_node_decision, routing_method, routing_confidence
+
+
+# ========================================
+# NODO SUPERVISOR (REFACTORIZADO)
+# ========================================
+
+def supervisor_node(state: AgentState) -> dict:
+    """
+    Nodo del supervisor que decide el siguiente paso.
+    Implementa circuit breaker inteligente con tracking de tipos de error.
+    Refactorizado en funciones helper para mejor mantenibilidad.
+    """
+    logger.info("--- SUPERVISOR ---")
+
+    # Extraer estado actual
+    error_count = state.get('error_count', 0)
+    error_types = state.get('error_types', {})
+    messages = state['messages']
+
+    # 1. Verificar circuit breaker
+    circuit_breaker_response = _check_circuit_breaker_status(state)
+    if circuit_breaker_response:
+        return circuit_breaker_response
+
+    # 2. Analizar último mensaje
+    possible_error_detected, error_type, error_count_delta, error_types_update = _analyze_last_message(messages)
+
+    # Actualizar contadores
+    if possible_error_detected:
+        error_count += error_count_delta
+        for err_type, count in error_types_update.items():
+            error_types[err_type] = error_types.get(err_type, 0) + count
+    elif error_type == 'success' and error_count > 0:
+        # Resetear contadores tras éxito
+        logger.info("🔄 Reseteando contadores de error tras éxito")
+        error_count = 0
+        error_types = {}
+
+    # 3. Verificar si activar circuit breaker
+    circuit_open = False
+    if possible_error_detected and should_open_circuit(error_types, error_count):
+        circuit_open = True
+        circuit_breaker_activation = _handle_circuit_breaker_activation(error_types, error_count)
+        circuit_breaker_activation["error_count"] = error_count
+        circuit_breaker_activation["error_types"] = error_types
+        return circuit_breaker_activation
+
+    # 4. Ejecutar routing
+    next_node_decision, routing_method, routing_confidence = _execute_routing_decision(state, messages)
+
+    # 5. Resetear contadores si tarea exitosa
     previous_node = state.get('next_node', None)
-    
-    # Si no hubo error y cambió de nodo o finalizó, resetear contadores
     if not possible_error_detected:
         if next_node_decision == "FINISH" or next_node_decision != previous_node:
             if error_count > 0:
                 logger.info("🔄 Tarea exitosa - reseteando contadores de error")
                 error_count = 0
                 error_types = {}
-    
+
     return {
         "next_node": next_node_decision,
         "error_count": error_count,
         "error_types": error_types,
         "circuit_open": circuit_open,
         "last_error_time": datetime.now().timestamp() if possible_error_detected else 0,
-        # Metadata del sistema de routing
         "routing_method": routing_method,
         "routing_confidence": routing_confidence
     }
