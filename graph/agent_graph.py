@@ -258,7 +258,7 @@ No des explicaciones, solo la categoría."""
     try:
         # Usar LLM con temperatura 0 para determinismo
         from config import get_llm
-        llm_clasificador = get_llm(temperature=0.0)
+        llm_clasificador = get_llm()
         clasificacion = llm_clasificador.invoke(clasificacion_msg).content.strip().upper()
         logger.info(f"🏷️ Clasificación: {clasificacion}")
     except Exception as e:

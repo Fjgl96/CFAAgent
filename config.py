@@ -222,8 +222,7 @@ def get_llm():
                 temperature=LLM_TEMPERATURE,
                 api_key=ANTHROPIC_API_KEY,
                 timeout=30.0,
-                max_retries=2,
-                max_tokens=512
+                max_retries=2
             )
             # Ping test para validar
             llm_claude.invoke("test")
@@ -246,8 +245,7 @@ def get_llm():
                 temperature=LLM_TEMPERATURE,
                 api_key=OPENAI_API_KEY,
                 timeout=30.0,
-                max_retries=2,
-                max_tokens=512
+                max_retries=2
             )
             # Ping test para validar
             llm_openai.invoke("test")
