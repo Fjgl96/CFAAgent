@@ -180,85 +180,129 @@ from langchain.cache import InMemoryCache
 set_llm_cache(InMemoryCache())
 print("✅ Cache de LLM habilitado (InMemoryCache)")
 
-# --- ¡AQUÍ ESTÁ LA NUEVA FUNCIÓN 'get_llm'! ---
+# --- FUNCIÓN 'get_llm' MEJORADA - PATRÓN CHAIN OF RESPONSIBILITY ---
 def get_llm():
     """
-    Crea una instancia singleton de LLM con fallback en tiempo de ejecución.
-    Intenta Claude (Primario), si falla, usa OpenAI (Fallback).
-    Maneja errores de autenticación al inicio.
+    Crea una instancia singleton de LLM con fallback multi-modelo resiliente.
+    Implementa el patrón Chain of Responsibility.
+
+    Orden de prioridad:
+    1. Claude (Anthropic) - Primario
+    2. OpenAI - Fallback 1
+    3. Google Gemini - Fallback 2
+
+    Ventajas:
+    - Resiliencia ante caídas de proveedores
+    - Validación de API keys con ping test
+    - Degradación gradual de capacidades
+    - Logging detallado de estado
+
+    Returns:
+        Instancia de LLM con fallbacks configurados
     """
     global _llm_instance
-    
+
     # Si la instancia ya existe, la devuelve
     if _llm_instance is not None:
         return _llm_instance
 
-    # Si no, la crea (Lógica de Fallback)
-    print("🧠 Creando instancia singleton de LLM con fallback...")
-    
-    llm_primary = None
-    llm_fallback = None
+    # Si no, la crea (Lógica de Fallback Multi-LLM)
+    print("🧠 Creando instancia singleton de LLM con fallback resiliente...")
 
-    # 1. Configurar el LLM Principal (Claude)
+    # Lista de modelos a intentar (Chain of Responsibility)
+    llm_chain = []
+
+    # ========================================
+    # 1. PRIMARIO: Claude (Anthropic)
+    # ========================================
     try:
-        if not ANTHROPIC_API_KEY:
-            raise AnthropicAuthError("ANTHROPIC_API_KEY no encontrada.")
-
-        llm_primary = ChatAnthropic(
-            model=LLM_MODEL_PRIMARY,
-            temperature=LLM_TEMPERATURE,
-            api_key=ANTHROPIC_API_KEY,
-            timeout=30.0,  # Timeout de 30 segundos
-            max_retries=2  # Reintentar hasta 2 veces
-        )
-        llm_primary.invoke("Ping test") # Validar la key
-        
-    except AnthropicAuthError as e:
-        st.warning(f"⚠️ Auth Error en Claude: {e}")
-    except Exception as e:
-        st.warning(f"⚠️ Error al inicializar Claude: {e}")
-
-    # 2. Configurar el LLM de Fallback (OpenAI)
-    try:
-        if not OPENAI_API_KEY:
-            raise OpenAIAuthError("OPENAI_API_KEY no encontrada.")
-
-        llm_fallback = ChatOpenAI(
-            model=LLM_MODEL_FALLBACK,
-            temperature=LLM_TEMPERATURE,
-            api_key=OPENAI_API_KEY,
-            timeout=30.0,  # Timeout de 30 segundos
-            max_retries=2  # Reintentar hasta 2 veces
-        )
-        llm_fallback.invoke("Ping test") # Validar la key
-        
-    except OpenAIAuthError as e:
-        st.warning(f"⚠️ Auth Error en OpenAI: {e}")
-    except Exception as e:
-        st.warning(f"⚠️ Error al inicializar OpenAI: {e}")
-
-    # 3. Crear el LLM final y guardarlo en el singleton
-    
-    if llm_primary:
-        if llm_fallback:
-            # Caso Ideal: Claude funciona, OpenAI es el respaldo
-            print("✅ LLM configurado: Claude (Primario) con Fallback a OpenAI.")
-            _llm_instance = llm_primary.with_fallbacks([llm_fallback])
+        if ANTHROPIC_API_KEY:
+            llm_claude = ChatAnthropic(
+                model=LLM_MODEL_PRIMARY,
+                temperature=LLM_TEMPERATURE,
+                api_key=ANTHROPIC_API_KEY,
+                timeout=30.0,
+                max_retries=2
+            )
+            # Ping test para validar
+            llm_claude.invoke("test")
+            llm_chain.append(llm_claude)
+            print(f"✅ [1/3] Claude {LLM_MODEL_PRIMARY} disponible (Primario)")
         else:
-            # Solo Claude está disponible
-            print("✅ LLM configurado: Claude (Primario). Fallback no disponible.")
-            _llm_instance = llm_primary
-            
-    elif llm_fallback:
-        # Solo OpenAI está disponible (Claude falló al inicio)
-        print("⚠️ LLM configurado: OpenAI (Fallback) únicamente. Claude falló al iniciar.")
-        _llm_instance = llm_fallback
-        
-    else:
-        # ¡NUEVO! Caso en que NINGUNO funcionó
+            print("⚠️ [1/3] Claude: API key no configurada")
+    except AnthropicAuthError as e:
+        print(f"⚠️ [1/3] Claude: Error de autenticación - {e}")
+    except Exception as e:
+        print(f"⚠️ [1/3] Claude: Error de inicialización - {e}")
+
+    # ========================================
+    # 2. FALLBACK 1: OpenAI
+    # ========================================
+    try:
+        if OPENAI_API_KEY:
+            llm_openai = ChatOpenAI(
+                model=LLM_MODEL_FALLBACK,
+                temperature=LLM_TEMPERATURE,
+                api_key=OPENAI_API_KEY,
+                timeout=30.0,
+                max_retries=2
+            )
+            # Ping test para validar
+            llm_openai.invoke("test")
+            llm_chain.append(llm_openai)
+            print(f"✅ [2/3] OpenAI {LLM_MODEL_FALLBACK} disponible (Fallback 1)")
+        else:
+            print("⚠️ [2/3] OpenAI: API key no configurada")
+    except OpenAIAuthError as e:
+        print(f"⚠️ [2/3] OpenAI: Error de autenticación - {e}")
+    except Exception as e:
+        print(f"⚠️ [2/3] OpenAI: Error de inicialización - {e}")
+
+    # ========================================
+    # 3. FALLBACK 2: Google Gemini
+    # ========================================
+    try:
+        google_api_key = load_api_key("GOOGLE_API_KEY", "GOOGLE_API_KEY", required=False)
+        if google_api_key:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            llm_gemini = ChatGoogleGenerativeAI(
+                model="gemini-1.5-flash",
+                temperature=LLM_TEMPERATURE,
+                google_api_key=google_api_key,
+                timeout=30.0,
+                max_retries=2
+            )
+            # Ping test para validar
+            llm_gemini.invoke("test")
+            llm_chain.append(llm_gemini)
+            print("✅ [3/3] Google Gemini disponible (Fallback 2)")
+        else:
+            print("⚠️ [3/3] Google Gemini: API key no configurada")
+    except Exception as e:
+        print(f"⚠️ [3/3] Google Gemini: Error de inicialización - {e}")
+
+    # ========================================
+    # 4. CONSTRUIR CADENA DE FALLBACKS
+    # ========================================
+    if len(llm_chain) == 0:
+        # ❌ Caso crítico: NINGÚN modelo disponible
         st.error("❌ ERROR CRÍTICO: No se pudo inicializar ningún modelo LLM.")
+        st.error("Verifica tus API keys en .env o Streamlit secrets.")
         print("❌ ERROR CRÍTICO: Fallo en la autenticación de TODOS los modelos LLM.")
-        st.stop() # Detener la aplicación si no hay ningún LLM
+        st.stop()
+
+    elif len(llm_chain) == 1:
+        # ⚠️ Solo UN modelo disponible (sin fallback)
+        _llm_instance = llm_chain[0]
+        print(f"⚠️ LLM configurado con 1 modelo (SIN fallback)")
+        st.warning("⚠️ Sistema funcionando con 1 solo modelo LLM. Considera configurar fallbacks.")
+
+    else:
+        # ✅ Múltiples modelos: Construir cadena con with_fallbacks
+        _llm_instance = llm_chain[0].with_fallbacks(llm_chain[1:])
+        print(f"✅ LLM configurado con {len(llm_chain)} modelos en cadena de fallback")
+        print(f"   Orden: {' → '.join([type(llm).__name__ for llm in llm_chain])}")
 
     return _llm_instance
 # ========================================
@@ -267,6 +311,33 @@ def get_llm():
 
 CIRCUIT_BREAKER_MAX_RETRIES = 2
 CIRCUIT_BREAKER_COOLDOWN = 10
+
+# ========================================
+# POSTGRESQL CONFIGURATION (S26 - Persistencia)
+# ========================================
+
+# URI de PostgreSQL para persistencia de checkpoints
+# Formato: postgresql://user:password@host:port/database
+# Ejemplo local: postgresql://postgres:password@localhost:5432/cfaagent_db
+# Ejemplo cloud: postgresql://user:pass@host.provider.com:5432/db_name
+
+POSTGRES_URI = os.getenv(
+    "POSTGRES_URI",
+    "postgresql://postgres:postgres@localhost:5432/cfaagent_db"
+)
+
+# Flag para habilitar/deshabilitar persistencia PostgreSQL
+# Si es False, usa MemorySaver (volátil, solo para desarrollo)
+ENABLE_POSTGRES_PERSISTENCE = os.getenv("ENABLE_POSTGRES_PERSISTENCE", "false").lower() == "true"
+
+def get_postgres_uri() -> str:
+    """
+    Retorna la URI de PostgreSQL para persistencia.
+
+    Returns:
+        URI de conexión a PostgreSQL
+    """
+    return POSTGRES_URI
 # ========================================
 # SISTEMA DE ROLES (OPCIONAL)
 # ========================================

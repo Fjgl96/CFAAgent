@@ -62,9 +62,30 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 
 def nodo_rag(state: dict) -> dict:
-    """Nodo que consulta material financiero usando RAG."""
-    logger.info("📚 Agente RAG invocado")
-    
+    """
+    Nodo ReAct Autónomo para RAG (Patrón S30).
+
+    DIFERENCIAS vs versión anterior:
+    - Antes: Buscaba UNA vez y respondía (pasivo)
+    - Ahora: Agente ReAct que puede razonar, buscar iterativamente, corregir (autónomo)
+
+    CAPACIDADES REACTIVAS:
+    1. Razonamiento: Analiza la pregunta y planifica búsquedas
+    2. Búsqueda iterativa: Si no encuentra, reformula y reintenta
+    3. Descomposición: Divide conceptos complejos en búsquedas más simples
+    4. Síntesis: Combina múltiples fragmentos en respuesta coherente
+
+    Ejemplo:
+    - Usuario: "¿Qué es el WACC?"
+    - Agente ReAct:
+      1. Razona: "Necesito buscar información sobre WACC"
+      2. Busca: "WACC" → Encuentra definición
+      3. Razona: "Necesito también componentes (costo equity, costo deuda)"
+      4. Busca: "WACC components" → Encuentra fórmula
+      5. Sintetiza: Combina definición + fórmula + interpretación
+    """
+    logger.info("📚 Agente RAG ReAct invocado (S30 Pattern)")
+
     # Extraer última pregunta del usuario
     messages = state.get("messages", [])
     if not messages:
@@ -72,28 +93,157 @@ def nodo_rag(state: dict) -> dict:
         return {
             "messages": [AIMessage(content="Error: No hay mensajes en el estado.")]
         }
-    
+
     last_message = messages[-1]
-    
+
     # Extraer contenido
     if hasattr(last_message, 'content'):
         consulta = last_message.content
     else:
         consulta = str(last_message)
-    
+
     logger.info(f"🔍 Consulta financiera: {consulta[:100]}...")
 
-    # Buscar en material financiero usando RAG
     try:
-        resultado = buscar_documentacion_financiera.invoke({"consulta": consulta})
-        logger.info("✅ Respuesta RAG generada")
+        # ========================================
+        # AGENTE REACT AUTÓNOMO
+        # ========================================
 
+        # System prompt que habilita razonamiento iterativo
+        system_prompt_react = """Eres un Analista Financiero Senior especializado en material CFA.
+
+**TU MISIÓN:** Responder preguntas complejas usando tu herramienta de búsqueda de forma ITERATIVA y ESTRATÉGICA.
+
+**HERRAMIENTA DISPONIBLE:**
+- `buscar_documentacion_financiera`: Busca en material de estudio CFA indexado
+
+**PROTOCOLO DE BÚSQUEDA INTELIGENTE (Chain of Thought):**
+
+**PASO 1: ANALIZAR LA PREGUNTA**
+- ¿Es un concepto simple o compuesto?
+- ¿Requiere múltiples búsquedas?
+- Ejemplo: "¿Qué es el WACC?" (simple) vs "¿Cómo se calcula el WACC y cuáles son sus componentes?" (compuesto)
+
+**PASO 2: PLANIFICAR BÚSQUEDAS**
+- Para conceptos simples: 1 búsqueda directa
+- Para conceptos compuestos: Descomponer en búsquedas específicas
+- Ejemplo WACC compuesto:
+  1. Buscar "WACC definition"
+  2. Buscar "WACC formula components"
+  3. Buscar "cost of equity cost of debt"
+
+**PASO 3: EJECUTAR BÚSQUEDAS ITERATIVAS**
+- Busca el concepto principal PRIMERO
+- Si no encuentras suficiente información → Reformula y busca componentes
+- Si encuentras siglas/acrónimos → Busca su versión expandida
+- Ejemplos de reformulación:
+  - "WACC" → "Weighted Average Cost of Capital"
+  - "VAN" → "Net Present Value NPV"
+  - "Duration" → "Macaulay Duration Modified Duration"
+
+**PASO 4: EVALUAR RESULTADOS**
+- ¿La información encontrada responde completamente la pregunta?
+- SI NO → Identifica qué falta y busca específicamente eso
+- Ejemplo: Si solo encuentras definición pero falta fórmula → Busca "[concepto] formula calculation"
+
+**PASO 5: SINTETIZAR RESPUESTA**
+- Combina TODOS los fragmentos encontrados
+- Estructura: Definición → Fórmula → Componentes → Interpretación
+- NO copies fragmentos literales → Parafrasea en español
+- Incluye términos técnicos: español (acrónimo en inglés)
+
+**EJEMPLOS DE USO:**
+
+**Ejemplo 1: Concepto simple**
+```
+Usuario: "¿Qué es el beta?"
+→ Acción 1: buscar_documentacion_financiera("beta systematic risk")
+→ Resultado: Fragmento con definición de beta
+→ Respuesta: [Síntesis en español de la definición]
+```
+
+**Ejemplo 2: Concepto compuesto con iteración**
+```
+Usuario: "¿Cómo se calcula el WACC?"
+→ Acción 1: buscar_documentacion_financiera("WACC Weighted Average Cost of Capital")
+→ Resultado: Fragmento con definición pero sin fórmula completa
+→ Pensamiento: "Necesito la fórmula específica y componentes"
+→ Acción 2: buscar_documentacion_financiera("WACC formula cost of equity cost of debt")
+→ Resultado: Fragmento con fórmula y componentes
+→ Respuesta: [Síntesis combinando ambos fragmentos: definición + fórmula + componentes]
+```
+
+**Ejemplo 3: Búsqueda fallida → Reformulación**
+```
+Usuario: "Explica la duración modificada"
+→ Acción 1: buscar_documentacion_financiera("duración modificada")
+→ Resultado: No se encontró información (material en inglés)
+→ Pensamiento: "El material está en inglés, debo buscar en inglés"
+→ Acción 2: buscar_documentacion_financiera("modified duration bond")
+→ Resultado: Fragmento con explicación de modified duration
+→ Respuesta: [Síntesis en español del concepto]
+```
+
+**PROHIBICIONES:**
+❌ NO inventes información que no esté en los fragmentos
+❌ NO uses tu conocimiento general del LLM
+❌ NO te rindas después de 1 sola búsqueda fallida
+❌ NO copies fragmentos literales → Siempre parafrasea
+
+**IMPORTANTE:**
+- Puedes hacer HASTA 3 búsquedas si es necesario
+- Cada búsqueda debe tener un propósito claro
+- Piensa en voz alta (Chain of Thought) entre búsquedas
+- Si después de 3 búsquedas no encuentras nada → Admite que el material no está disponible
+"""
+
+        # Bindear LLM con system prompt
+        llm_react = llm.bind(system=system_prompt_react)
+
+        # Crear agente ReAct con la herramienta de búsqueda
+        agent_react = create_react_agent(
+            llm_react,
+            tools=[buscar_documentacion_financiera]
+        )
+
+        # Preparar input para el agente
+        agent_input = {
+            "messages": [HumanMessage(content=consulta)]
+        }
+
+        # Invocar agente ReAct (puede hacer múltiples búsquedas)
+        logger.info("🤖 Ejecutando agente ReAct autónomo...")
+        result = agent_react.invoke(agent_input)
+
+        # Extraer respuesta final del agente
+        agent_messages = result.get("messages", [])
+
+        # La última respuesta del agente es la síntesis final
+        if agent_messages:
+            # Buscar el último AIMessage (respuesta final del agente)
+            final_response = None
+            for msg in reversed(agent_messages):
+                if isinstance(msg, AIMessage) and not getattr(msg, 'tool_calls', []):
+                    final_response = msg.content
+                    break
+
+            if final_response:
+                logger.info("✅ Agente ReAct completó búsqueda iterativa")
+                return {
+                    "messages": [AIMessage(content=final_response)]
+                }
+
+        # Fallback si no hay respuesta clara
+        logger.warning("⚠️ Agente ReAct no generó respuesta final clara")
         return {
-            "messages": [AIMessage(content=resultado)]
+            "messages": [AIMessage(
+                content="No pude encontrar información suficiente para responder tu pregunta. "
+                        "Intenta reformularla o consulta directamente al agente especializado correspondiente."
+            )]
         }
 
     except Exception as e:
-        logger.error(f"❌ Error en RAG: {e}", exc_info=True)
+        logger.error(f"❌ Error en RAG ReAct: {e}", exc_info=True)
         return {
             "messages": [AIMessage(
                 content=f"Error al buscar en el material de estudio: {e}"

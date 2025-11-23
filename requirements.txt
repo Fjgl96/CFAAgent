@@ -25,6 +25,29 @@ elasticsearch>=8.15.0
 langchain-elasticsearch>=0.3.0
 
 # ========================================
+# LlamaIndex - Semantic Chunking (S29)
+# ========================================
+llama-index-core>=0.10.0
+llama-index-embeddings-openai>=0.1.0
+llama-index-vector-stores-elasticsearch>=0.2.0
+
+# ========================================
+# PostgreSQL - Persistent Checkpointing (S26)
+# ========================================
+psycopg[binary,pool]>=3.1.0
+
+# ========================================
+# Evaluation Framework (S25)
+# ========================================
+ragas>=0.1.0
+datasets>=2.14.0
+
+# ========================================
+# Multi-LLM Support (Resilience)
+# ========================================
+langchain-google-genai>=1.0.0
+
+# ========================================
 # Document Loaders
 # ========================================
 pypdf>=5.0.0
