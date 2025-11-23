@@ -1,8 +1,23 @@
 # 🏛️ Arquitectura de 3 Capas - Resumen de Implementación
 
-## ✅ IMPLEMENTACIÓN COMPLETADA
+## ⚠️ DEPRECADO (2025-11-23)
 
-Se ha implementado exitosamente la **Arquitectura de Routing de 3 Capas** siguiendo todas las buenas prácticas de ingeniería de software y manteniendo **máxima precaución** con la estabilidad del sistema.
+**NOTA IMPORTANTE**: Este sistema de routing de 3 capas (FastPatternRouter + HybridRouter + YAML configs) ha sido **reemplazado** por un **sistema de clasificación LLM simple** con 3 categorías (TEORICA/PRACTICA/AYUDA).
+
+**Razones del cambio**:
+- Over-engineering para el caso de uso actual (~100 queries/día de un estudiante)
+- Eliminación de 500+ líneas de código complejo
+- Mayor simplicidad y mantenibilidad
+- Latencia ligeramente superior (+0.5s) pero aceptable para el caso de uso
+- Mejor manejo de casos ambiguos usando LLM en lugar de regex
+
+**Nueva implementación**: Ver `graph/agent_graph.py:supervisor_node()` (líneas 205-308)
+
+---
+
+## ✅ IMPLEMENTACIÓN ORIGINAL (HISTÓRICO)
+
+Se había implementado exitosamente la **Arquitectura de Routing de 3 Capas** siguiendo todas las buenas prácticas de ingeniería de software y manteniendo **máxima precaución** con la estabilidad del sistema.
 
 ---
 
