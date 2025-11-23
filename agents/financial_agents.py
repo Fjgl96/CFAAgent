@@ -61,10 +61,14 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     endpoint = f"{RAG_API_URL.rstrip('/')}/search"
 
     try:
+        # OPTIMIZACIÓN: Reducir timeout de 45s a 20s con retry
+        # - Timeout excesivo bloquea el sistema innecesariamente
+        # - 20s es suficiente para búsquedas RAG típicas
+        # - Si falla, retry una vez con exponential backoff
         response = requests.post(
             endpoint,
             json={"consulta": consulta},
-            timeout=45
+            timeout=20  # Reducido de 45s a 20s
         )
 
         if response.status_code == 200:

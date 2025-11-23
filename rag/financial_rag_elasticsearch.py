@@ -245,9 +245,42 @@ TERMINOS_TECNICOS = {
     "retorno": ["return", "retorno", "rendimiento", "expected return"],
 }
 
+# ========================================
+# ÍNDICE INVERSO PARA TÉRMINOS TÉCNICOS
+# ========================================
+
+def _construir_indice_inverso() -> dict:
+    """
+    Construye índice inverso para búsqueda O(1) de términos técnicos.
+
+    OPTIMIZACIÓN: En lugar de buscar O(n²) (palabra x término),
+    creamos un índice {palabra_lower: [claves]} para búsqueda O(1).
+
+    Returns:
+        Dict mapping palabra -> lista de claves en TERMINOS_TECNICOS
+    """
+    indice = {}
+    for key, synonyms in TERMINOS_TECNICOS.items():
+        for term in synonyms:
+            # Normalizar término (lower + split por espacios)
+            palabras = term.lower().split()
+            for palabra in palabras:
+                if palabra not in indice:
+                    indice[palabra] = []
+                if key not in indice[palabra]:
+                    indice[palabra].append(key)
+    return indice
+
+# Construir índice una sola vez al cargar el módulo
+_INDICE_INVERSO = _construir_indice_inverso()
+print(f"✅ Índice inverso construido: {len(_INDICE_INVERSO)} palabras -> términos técnicos")
+
+
 def enriquecer_query_bilingue(consulta: str) -> str:
     """
     Enriquece la consulta agregando términos técnicos en inglés si se detectan en español.
+
+    OPTIMIZACIÓN: Usa índice inverso para búsqueda O(1) en lugar de O(n²).
 
     Args:
         consulta: Query original del usuario (probablemente en español)
@@ -256,17 +289,20 @@ def enriquecer_query_bilingue(consulta: str) -> str:
         Query enriquecida con términos bilingües
     """
     consulta_lower = consulta.lower()
-    terminos_agregados = []
+    palabras_query = consulta_lower.split()
 
-    # Buscar términos técnicos en la query
-    for key, synonyms in TERMINOS_TECNICOS.items():
-        # Si encontramos algún término relacionado en la query
-        if any(term.lower() in consulta_lower for term in synonyms):
-            # Agregar todos los sinónimos para mejorar la búsqueda
-            terminos_agregados.extend(synonyms)
+    # Buscar términos técnicos usando índice inverso (O(1) por palabra)
+    claves_encontradas = set()
+    for palabra in palabras_query:
+        if palabra in _INDICE_INVERSO:
+            claves_encontradas.update(_INDICE_INVERSO[palabra])
 
-    # Si encontramos términos técnicos, enriquecer la query
-    if terminos_agregados:
+    # Si encontramos términos técnicos, agregar todos sus sinónimos
+    if claves_encontradas:
+        terminos_agregados = []
+        for clave in claves_encontradas:
+            terminos_agregados.extend(TERMINOS_TECNICOS[clave])
+
         # Eliminar duplicados manteniendo orden
         terminos_unicos = list(dict.fromkeys(terminos_agregados))
         terminos_str = " ".join(terminos_unicos)
@@ -306,21 +342,23 @@ def generar_variaciones_query(consulta: str) -> List[str]:
     if consulta_enriquecida != consulta:
         variaciones.append(consulta_enriquecida)
 
-    # Variación 3: Extraer palabras clave (acrónimos y sustantivos técnicos)
+    # Variación 3: Extraer palabras clave (acrónimos y sustantivos técnicos) - OPTIMIZADO
     import re
     # Buscar acrónimos (2-5 letras mayúsculas)
     acronimos = re.findall(r'\b[A-Z]{2,5}\b', consulta)
-    # Buscar palabras técnicas comunes en el diccionario
+
+    # Buscar palabras técnicas usando índice inverso (O(1) en lugar de O(n²))
     palabras_query = consulta.lower().split()
     palabras_tecnicas = []
+
     for palabra in palabras_query:
-        # Buscar en TERMINOS_TECNICOS
-        for key, synonyms in TERMINOS_TECNICOS.items():
-            if any(palabra in term.lower() for term in synonyms):
-                # Agregar la versión en inglés (primera en la lista de sinónimos)
-                if synonyms[0] not in palabras_tecnicas:
-                    palabras_tecnicas.append(synonyms[0])
-                break
+        if palabra in _INDICE_INVERSO:
+            # Encontrar claves relacionadas
+            for clave in _INDICE_INVERSO[palabra]:
+                # Agregar primera variante (típicamente en inglés)
+                first_synonym = TERMINOS_TECNICOS[clave][0]
+                if first_synonym not in palabras_tecnicas:
+                    palabras_tecnicas.append(first_synonym)
 
     # Combinar acrónimos + palabras técnicas
     if acronimos or palabras_tecnicas:
@@ -335,10 +373,11 @@ def buscar_multi_query_paralelo(consulta: str, k_per_query: int = 2) -> List[Doc
     """
     Ejecuta múltiples variaciones de búsqueda EN PARALELO y combina resultados.
 
-    OPTIMIZACIÓN CLAVE:
+    OPTIMIZACIONES:
     - Genera 2-3 variaciones de query SIN LLM adicional
     - Ejecuta búsquedas en paralelo usando ThreadPoolExecutor
-    - Deduplica resultados por contenido
+    - Deduplica resultados con SHA256 (más robusto que hash())
+    - Timeout de 10s por búsqueda para evitar colgarse
     - Retorna top-k más relevantes
 
     Args:
@@ -348,7 +387,8 @@ def buscar_multi_query_paralelo(consulta: str, k_per_query: int = 2) -> List[Doc
     Returns:
         Lista combinada de documentos únicos (max 4-6 resultados)
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+    import hashlib
 
     print(f"🚀 Multi-Query: Generando variaciones de '{consulta}'...")
 
@@ -384,16 +424,22 @@ def buscar_multi_query_paralelo(consulta: str, k_per_query: int = 2) -> List[Doc
         for future in as_completed(future_to_query):
             query_var = future_to_query[future]
             try:
-                docs = future.result()
+                # OPTIMIZACIÓN: Agregar timeout de 10s para evitar colgarse
+                docs = future.result(timeout=10)
 
                 # Deduplicar por contenido
                 for doc in docs:
-                    # Hash del contenido para detectar duplicados
-                    content_hash = hash(doc.page_content[:200])  # Primeros 200 chars
+                    # OPTIMIZACIÓN: Usar SHA256 en lugar de hash() para mejor unicidad
+                    content_hash = hashlib.sha256(
+                        doc.page_content.encode('utf-8')
+                    ).hexdigest()
+
                     if content_hash not in contenidos_vistos:
                         contenidos_vistos.add(content_hash)
                         resultados_combinados.append(doc)
 
+            except TimeoutError:
+                print(f"⏱️ Timeout en búsqueda de '{query_var[:30]}...' (>10s)")
             except Exception as e:
                 print(f"❌ Error procesando resultados de '{query_var[:30]}...': {e}")
 
