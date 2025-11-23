@@ -1,18 +1,23 @@
 # agents/financial_agents.py
 """
 Agentes especializados financieros.
-Actualizado: Prompts con Máquina de Estados para evitar bucles y alucinaciones.
+Actualizado: 
+1. Usa Microservicio RAG externo (Cliente HTTP).
+2. Prompts con Máquina de Estados para evitar bucles y alucinaciones.
 """
 
+import os
+import requests
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
 from typing import Literal
 from pydantic import BaseModel, Field
 
-# Importar LLM de config
-from config import get_llm
+# Importar configuración
+from config import get_llm, RAG_API_URL
 
-# Importar herramientas individuales
+# Importar herramientas financieras (locales)
 from tools.financial_tools import (
     # Herramientas originales
     _calcular_valor_presente_bono, _calcular_van, _calcular_wacc,
@@ -28,8 +33,8 @@ from tools.financial_tools import (
 )
 from tools.help_tools import obtener_ejemplos_de_uso
 
-# Importar RAG
-from rag.financial_rag_elasticsearch import buscar_documentacion_financiera
+# NOTA: Se eliminó la importación local de rag.financial_rag_elasticsearch
+# Ahora usamos la herramienta definida abajo que conecta al microservicio.
 
 # Importar logger
 try:
@@ -40,6 +45,48 @@ except ImportError:
     logger = logging.getLogger('agents')
 
 llm = get_llm()
+
+# ========================================
+# HERRAMIENTA RAG (CLIENTE MICROSERVICIO)
+# ========================================
+
+@tool
+def buscar_documentacion_financiera(consulta: str) -> str:
+    """
+    Busca información en material financiero consultando el Microservicio RAG externo.
+    """
+    logger.info(f"🔍 Consultando Microservicio RAG: '{consulta[:50]}...'")
+    
+    if not RAG_API_URL:
+        msg = "❌ Error de configuración: RAG_API_URL no definida en secrets/env."
+        logger.error(msg)
+        return msg
+
+    # Asegurar endpoint correcto
+    endpoint = f"{RAG_API_URL.rstrip('/')}/search"
+
+    try:
+        response = requests.post(
+            endpoint,
+            json={"consulta": consulta},
+            timeout=45  # Timeout generoso
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            # La API devuelve {"resultado": "texto..."}
+            resultado = data.get("resultado", "No se encontró información relevante.")
+            logger.info("✅ Respuesta recibida del Microservicio")
+            return resultado
+        else:
+            error_msg = f"Error del Servicio RAG ({response.status_code}): {response.text}"
+            logger.error(f"❌ {error_msg}")
+            return error_msg
+
+    except Exception as e:
+        error_msg = f"Error de Conexión con RAG: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return error_msg
 
 # ========================================
 # NODOS ESPECIALES
@@ -65,6 +112,7 @@ def nodo_ayuda_directo(state: dict) -> dict:
 def nodo_rag(state: dict) -> dict:
     """
     Nodo ReAct Autónomo para RAG (Patrón S30).
+    Usa la herramienta 'buscar_documentacion_financiera' conectada al microservicio.
     """
     logger.info("📚 Agente RAG ReAct invocado (S30 Pattern)")
 
@@ -93,7 +141,7 @@ def nodo_rag(state: dict) -> dict:
 
         llm_react = llm.bind(system=system_prompt_react)
         
-        # Crear agente ReAct
+        # Crear agente ReAct con la herramienta HTTP
         agent_react = create_react_agent(
             llm_react,
             tools=[buscar_documentacion_financiera]
@@ -176,43 +224,60 @@ PROTOCOLO_SEGURIDAD = """
      FALTAN_DATOS"
 """
 
-PROMPT_RENTA_FIJA = f"""Eres un especialista en Renta Fija con 6 herramientas:
-valor_bono, duration_macaulay, duration_modificada, convexity, current_yield, bono_cupon_cero.
-
-{PROTOCOLO_SEGURIDAD}
+PROMPT_RENTA_FIJA = f"""Eres un especialista en Renta Fija con 6 herramientas de CFA Level I:
+1. 'calcular_valor_bono' - Valor presente de bonos
+2. 'calcular_duration_macaulay' - Duration Macaulay
+3. 'calcular_duration_modificada' - Duration Modificada
+4. 'calcular_convexity' - Convexity
+5. 'calcular_current_yield' - Current Yield
+6. 'calcular_bono_cupon_cero' - Bonos cupón cero
 
 **NOTA ESPECÍFICA:** Si piden Duration Modificada y falta la Macaulay, calcúlala primero si tienes datos, o pide los datos.
-"""
-
-PROMPT_FIN_CORP = f"""Eres un especialista en Finanzas Corporativas con 5 herramientas:
-van (NPV), wacc, tir (IRR), payback_period, profitability_index.
 
 {PROTOCOLO_SEGURIDAD}
+"""
+
+PROMPT_FIN_CORP = f"""Eres un especialista en Finanzas Corporativas con 5 herramientas de CFA Level I:
+1. 'calcular_van' - Valor Actual Neto (NPV)
+2. 'calcular_wacc' - Costo Promedio Ponderado de Capital
+3. 'calcular_tir' - Tasa Interna de Retorno (IRR)
+4. 'calcular_payback_period' - Periodo de Recuperación
+5. 'calcular_profitability_index' - Índice de Rentabilidad (PI)
 
 **REGLA CRÍTICA:** Si 'inversion_inicial' es 0, es un error lógico. Retorna ERROR_BLOQUEANTE reportando que la inversión debe ser mayor a 0.
-"""
-
-PROMPT_EQUITY = f"""Eres un especialista en Equity con 1 herramienta: gordon_growth.
 
 {PROTOCOLO_SEGURIDAD}
+"""
+
+PROMPT_EQUITY = f"""Eres un especialista en Equity con 1 herramienta: 'calcular_gordon_growth'.
 
 **REGLA CRÍTICA:** Revisa el historial por si el 'Ke' (costo equity) ya fue calculado por CAPM previamente. Si existe, úsalo.
-"""
-
-PROMPT_PORTAFOLIO = f"""Eres un especialista en Portafolios con 7 herramientas:
-capm, sharpe, treynor, jensen, beta_portafolio, retorno_portafolio, std_dev_portafolio.
 
 {PROTOCOLO_SEGURIDAD}
+"""
+
+PROMPT_PORTAFOLIO = f"""Eres un especialista en Gestión de Portafolios con 7 herramientas de CFA Level I:
+1. 'calcular_capm' - Capital Asset Pricing Model
+2. 'calcular_sharpe_ratio' - Sharpe Ratio
+3. 'calcular_treynor_ratio' - Treynor Ratio
+4. 'calcular_jensen_alpha' - Jensen's Alpha
+5. 'calcular_beta_portafolio' - Beta de Portafolio (2 activos)
+6. 'calcular_retorno_portafolio' - Retorno Esperado (2 activos)
+7. 'calcular_std_dev_portafolio' - Desviación Estándar (2 activos)
 
 **REGLA CRÍTICA:** Los pesos de portafolio deben sumar 1.0. Si no, ERROR_BLOQUEANTE.
-"""
-
-PROMPT_DERIVADOS = f"""Eres un especialista en Derivados con 3 herramientas:
-opcion_call, opcion_put, put_call_parity.
 
 {PROTOCOLO_SEGURIDAD}
+"""
+
+PROMPT_DERIVADOS = f"""Eres un especialista en Derivados con 3 herramientas de CFA Level I:
+1. 'calcular_opcion_call' - Opción Call Europea (Black-Scholes)
+2. 'calcular_opcion_put' - Opción Put Europea (Black-Scholes)
+3. 'calcular_put_call_parity' - Verificación Put-Call Parity
 
 **REGLA CRÍTICA:** Solo opciones EUROPEAS. Si piden Americanas -> ERROR_BLOQUEANTE explicando que no soportas americanas.
+
+{PROTOCOLO_SEGURIDAD}
 """
 
 
