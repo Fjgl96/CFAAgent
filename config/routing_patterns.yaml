@@ -22,6 +22,20 @@ settings:
 # ========================================
 # PATRONES DE INTENCIÓN DE CÁLCULO
 # ========================================
+rag_intent_patterns:
+  spanish:
+    - '\bqu[eé] es\b'
+    - '\bsignificado\b'
+    - '\bdefin(?:e|ici[oó]n)\b'
+    - '\bexplic(?:a|ar)\b'
+    - '\bconcept(?:o)?\b'
+  english:
+    - '\bwhat is\b'
+    - '\bdefine\b'
+    - '\bexplain\b'
+    - '\bconcept\b'
+    - '\bmeaning\b'
+
 
 calc_intent_patterns:
   spanish:

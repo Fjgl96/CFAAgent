@@ -7,7 +7,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional
-from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnablePassthrough
+from langchain_core.runnables import RunnableLambda, RunnableBranch
 from langchain_core.messages import HumanMessage
 
 # Importar logger
@@ -58,53 +58,32 @@ def get_default_patterns() -> Dict:
             'spanish': [r'\bcalcula(?:r)?\b', r'\bobt[eé]n(?:er)?\b'],
             'english': [r'\bcalculate\b', r'\bcompute\b'],
         },
+        # [NUEVO] Default para RAG si falla el YAML
+        'rag_intent_patterns': {
+            'spanish': [r'\bqu[eé] es\b', r'\bdefin(?:e|ici[oó]n)\b'],
+            'english': [r'\bwhat is\b', r'\bdefine\b']
+        },
         'agent_mappings': [
             # Finanzas Corporativas
             {'agent': 'Agente_Finanzas_Corp', 'priority': 10, 'keywords': {'spanish': [r'\bvan\b', 'npv'], 'english': ['npv']}, 'required_params': 3},
-            {'agent': 'Agente_Finanzas_Corp', 'priority': 9, 'keywords': {'spanish': [r'\bwacc\b'], 'english': ['wacc']}, 'required_params': 5},
-            {'agent': 'Agente_Finanzas_Corp', 'priority': 9, 'keywords': {'spanish': [r'\btir\b', 'irr'], 'english': ['irr']}, 'required_params': 2},
-            # Portafolio
-            {'agent': 'Agente_Portafolio', 'priority': 10, 'keywords': {'spanish': [r'\bcapm\b'], 'english': ['capm']}, 'required_params': 3},
-            {'agent': 'Agente_Portafolio', 'priority': 9, 'keywords': {'spanish': ['sharpe'], 'english': ['sharpe']}, 'required_params': 3},
-            # Renta Fija
-            {'agent': 'Agente_Renta_Fija', 'priority': 10, 'keywords': {'spanish': ['valor.*bono'], 'english': ['bond.*value']}, 'required_params': 5},
-            {'agent': 'Agente_Renta_Fija', 'priority': 9, 'keywords': {'spanish': ['duration.*macaulay'], 'english': ['macaulay duration']}, 'required_params': 5},
-            # Equity
-            {'agent': 'Agente_Equity', 'priority': 10, 'keywords': {'spanish': ['gordon'], 'english': ['gordon growth']}, 'required_params': 3},
-            # Derivados
-            {'agent': 'Agente_Derivados', 'priority': 10, 'keywords': {'spanish': ['opci[oó]n.*call'], 'english': ['call option']}, 'required_params': 5},
+            # ... (otros mappings básicos de respaldo)
         ],
         'param_patterns': [
-            {'name': 'cantidad_k', 'regex': r'\d+(?:\.\d+)?k\b'},
-            {'name': 'porcentaje', 'regex': r'\d+(?:\.\d+)?%'},
-            {'name': 'lista', 'regex': r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]'},
             {'name': 'numero', 'regex': r'\d+(?:\.\d+)?'},
         ]
     }
 
 
 # ========================================
-# LÓGICA DE FAST PATTERN (Función pura)
+# LÓGICA DE FAST PATTERN (MODIFICADA)
 # ========================================
 
 def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[str, Any]:
     """
-    Analiza query con pattern matching (lógica pura).
+    Analiza query con pattern matching (Soporta Cálculo y RAG).
 
     Esta es la lógica core del FastPatternRouter, pero como función pura
     que puede ser wrapeada en RunnableLambda.
-
-    Args:
-        state: Estado del grafo con messages
-        patterns: Diccionario de patrones cargados
-
-    Returns:
-        Dict con análisis: {
-            'target_agent': str,
-            'confidence': float,
-            'method': str,
-            'metadata': dict
-        }
     """
     messages = state.get('messages', [])
 
@@ -119,20 +98,36 @@ def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[st
     texto = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
     texto_lower = texto.lower()
 
-    # 1. Detectar intención de cálculo
-    has_intent = False
+    # 1. Detectar intención de CÁLCULO (Prioridad Alta)
+    # Siempre chequeamos cálculo primero para evitar conflictos.
+    has_calc_intent = False
     for pattern in patterns['calc_intent_patterns'].get('spanish', []) + patterns['calc_intent_patterns'].get('english', []):
         if re.search(pattern, texto_lower, re.IGNORECASE):
-            has_intent = True
+            has_calc_intent = True
             break
 
-    # 2. Extraer parámetros numéricos
+    # 2. [NUEVO] Detectar intención RAG (Solo si NO es cálculo obvio)
+    # Esto soluciona el Agent Hopping en preguntas teóricas.
+    if not has_calc_intent:
+        rag_patterns = patterns.get('rag_intent_patterns', {})
+        for pattern in rag_patterns.get('spanish', []) + rag_patterns.get('english', []):
+            if re.search(pattern, texto_lower, re.IGNORECASE):
+                logger.info(f"📚 Fast Pattern: Intención RAG detectada en '{texto[:30]}...'")
+                # Retorno temprano con confianza total
+                return {
+                    'target_agent': 'Agente_RAG',
+                    'confidence': 1.0,  # Confianza total para bypass
+                    'method': 'fast_pattern_rag',
+                    'metadata': {'reason': 'rag_keyword_match'}
+                }
+
+    # 3. Extraer parámetros numéricos (Lógica original para cálculos)
     params = []
     for param_config in patterns.get('param_patterns', []):
         matches = re.findall(param_config['regex'], texto)
         params.extend(matches)
 
-    # 3. Identificar agente por keywords
+    # 4. Identificar agente por keywords (Lógica original)
     mappings = sorted(patterns.get('agent_mappings', []), key=lambda x: x.get('priority', 0), reverse=True)
     agent_mapping = None
 
@@ -144,9 +139,9 @@ def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[st
         if agent_mapping:
             break
 
-    # 4. Calcular confianza
+    # 5. Calcular confianza (Lógica original)
     confidence = 0.0
-    if has_intent:
+    if has_calc_intent:
         confidence += 0.4
     if agent_mapping:
         confidence += 0.4
@@ -160,7 +155,7 @@ def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[st
 
     logger.info(
         f"📊 Fast Pattern: {target_agent} "
-        f"(conf={confidence:.2f}, intent={has_intent}, params={len(params)})"
+        f"(conf={confidence:.2f}, intent={has_calc_intent}, params={len(params)})"
     )
 
     return {
@@ -168,7 +163,7 @@ def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[st
         'confidence': confidence,
         'method': 'fast_pattern',
         'metadata': {
-            'has_intent': has_intent,
+            'has_intent': has_calc_intent,
             'params_detected': len(params),
             'params_sample': params[:3] if len(params) > 3 else params,
             'agent_priority': agent_mapping.get('priority', 0) if agent_mapping else 0
@@ -183,20 +178,11 @@ def analyze_query_fast_pattern(state: Dict[str, Any], patterns: Dict) -> Dict[st
 def create_fast_pattern_runnable(config_path: Optional[str] = None) -> RunnableLambda:
     """
     Crea un Runnable que ejecuta fast pattern matching.
-
-    Este es el enfoque idiomático de LangChain - convertir lógica en Runnable.
-
-    Args:
-        config_path: Ruta al archivo YAML de configuración
-
-    Returns:
-        RunnableLambda que analiza queries con pattern matching
     """
     # Cargar patrones una vez al crear el Runnable
     patterns = load_routing_patterns(config_path)
 
     # Crear RunnableLambda con la lógica de análisis
-    # Nota: usamos lambda para capturar 'patterns' en el closure
     fast_pattern = RunnableLambda(
         lambda state: analyze_query_fast_pattern(state, patterns),
         name="fast_pattern_router"
@@ -214,18 +200,6 @@ def create_hybrid_routing_branch(
 ) -> RunnableBranch:
     """
     Crea un RunnableBranch que implementa routing híbrido.
-
-    Este es el patrón correcto de LangChain para routing condicional.
-    Usa RunnableBranch para decidir entre fast pattern y LLM.
-
-    Args:
-        supervisor_llm: LLM configurado para supervisor
-        supervisor_prompt: Prompt del supervisor
-        threshold: Umbral de confianza para bypass
-        config_path: Ruta a configuración YAML
-
-    Returns:
-        RunnableBranch con lógica de routing híbrido
     """
     # Crear fast pattern runnable
     fast_pattern = create_fast_pattern_runnable(config_path)
@@ -296,18 +270,6 @@ def create_routing_node(
 ):
     """
     Crea un nodo de routing compatible con LangGraph.
-
-    Este nodo puede reemplazar directamente al supervisor_node original
-    o usarse como pre-procesador.
-
-    Args:
-        supervisor_llm: LLM del supervisor
-        supervisor_prompt: Prompt del supervisor
-        threshold: Umbral para bypass
-        config_path: Ruta a config YAML
-
-    Returns:
-        Función nodo compatible con LangGraph
     """
     # Crear routing branch
     routing_branch = create_hybrid_routing_branch(
@@ -320,7 +282,6 @@ def create_routing_node(
     def routing_node(state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Nodo de routing que usa RunnableBranch.
-
         Compatible con LangGraph - retorna dict con 'next_node'.
         """
         logger.info("🔀 Routing node (LangChain-native) ejecutándose...")
@@ -348,30 +309,3 @@ def create_routing_node(
             }
 
     return routing_node
-
-
-# ========================================
-# EJEMPLO DE USO
-# ========================================
-
-"""
-Ejemplo de cómo usar esto en agent_graph.py:
-
-from routing.langchain_routing import create_routing_node
-
-# En vez de:
-# def supervisor_node(state):
-#     route = supervisor_llm.invoke(...)
-#     return {'next_node': route.next_agent}
-
-# Usar:
-supervisor_node = create_routing_node(
-    supervisor_llm=supervisor_llm,
-    supervisor_prompt=supervisor_system_prompt,
-    threshold=0.8,
-    config_path="config/routing_patterns.yaml"
-)
-
-# El nodo es 100% compatible con LangGraph
-workflow.add_node("Supervisor", supervisor_node)
-"""

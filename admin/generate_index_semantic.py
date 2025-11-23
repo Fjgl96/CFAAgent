@@ -4,11 +4,7 @@ generate_index_semantic.py
 Script de ADMINISTRADOR para indexar libros CFA usando SEMANTIC CHUNKING.
 Implementa el Patrón S29: SemanticSplitterNodeParser de LlamaIndex
 
-DIFERENCIAS vs generate_index.py:
-1. Usa SemanticSplitterNodeParser (LlamaIndex) en lugar de RecursiveCharacterTextSplitter
-2. Corta solo cuando hay cambio drástico de tema (percentil 95)
-3. Preserva fórmulas financieras completas
-4. Más preciso para material técnico financiero
+CORRECCIÓN APICADA: Pre-splitting para evitar errores de context length (8192 tokens).
 
 USO:
 1. Coloca tus libros CFA en: ./data/cfa_books/
@@ -190,7 +186,7 @@ def split_documents_semantic(documents):
     """
     print_header("Fragmentación Semántica (S29 Pattern)")
 
-    from llama_index.core.node_parser import SemanticSplitterNodeParser
+    from llama_index.core.node_parser import SemanticSplitterNodeParser, SentenceSplitter
     from llama_index.embeddings.openai import OpenAIEmbedding
 
     print(f"🧠 Modelo de embeddings: {EMBEDDING_MODEL}")
@@ -199,6 +195,18 @@ def split_documents_semantic(documents):
     print(f"   - Preserva contexto financiero completo\n")
 
     try:
+        # 0. PRE-PROCESAMIENTO DE SEGURIDAD
+        # Dividir documentos gigantes en bloques manejables (<8192 tokens)
+        # Esto evita el error OpenAI BadRequestError (context length exceeded)
+        print("🛡️  Ejecutando pre-split de seguridad (max 4000 tokens)...")
+        
+        pre_splitter = SentenceSplitter(
+            chunk_size=4000,
+            chunk_overlap=200
+        )
+        safe_nodes = pre_splitter.get_nodes_from_documents(documents, show_progress=True)
+        print(f"✅ Pre-split completado: {len(documents)} docs originales → {len(safe_nodes)} bloques seguros\n")
+
         # 1. Inicializar modelo de embeddings
         embed_model = OpenAIEmbedding(
             model=EMBEDDING_MODEL,
@@ -214,13 +222,13 @@ def split_documents_semantic(documents):
             embed_model=embed_model
         )
 
-        print("🔍 Procesando documentos...")
+        print("🔍 Ejecutando análisis semántico...")
 
-        # 3. Fragmentar documentos
-        nodes = splitter.get_nodes_from_documents(documents, show_progress=True)
+        # 3. Fragmentar los nodos seguros
+        nodes = splitter.get_nodes_from_documents(safe_nodes, show_progress=True)
 
         print(f"\n✅ {len(nodes)} nodos semánticos creados")
-        print(f"   Promedio: {len(nodes) / max(len(documents), 1):.1f} nodos por documento\n")
+        print(f"   Promedio: {len(nodes) / max(len(documents), 1):.1f} nodos por documento original\n")
 
         # Estadísticas de tamaño de chunks
         chunk_sizes = [len(node.text) for node in nodes]
@@ -283,13 +291,8 @@ def create_or_recreate_index(es_client):
 
 def index_nodes_to_elasticsearch(nodes):
     """
-    Indexa nodos semánticos en Elasticsearch usando LlamaIndex.
-
-    Args:
-        nodes: Lista de nodos de LlamaIndex
-
-    Returns:
-        True si la indexación fue exitosa
+    Indexa nodos semánticos en Elasticsearch usando LlamaIndex con BATCHING MANUAL.
+    Corrige el error de Timeout dividiendo el trabajo en lotes pequeños.
     """
     print_header("Indexando Nodos Semánticos en Elasticsearch")
 
@@ -308,38 +311,65 @@ def index_nodes_to_elasticsearch(nodes):
             api_key=OPENAI_API_KEY
         )
 
-        # 2. Crear ElasticsearchStore
+        # 2. Crear ElasticsearchStore con TIMEOUT aumentado
+        # Agregamos request_timeout=300 (5 minutos) y retry_on_timeout=True
         vector_store = ElasticsearchStore(
             index_name=SEMANTIC_INDEX_NAME,
             es_url=ES_URL,
             es_user=ES_USERNAME,
-            es_password=ES_PASSWORD
+            es_password=ES_PASSWORD,
+            request_timeout=300,
+            retry_on_timeout=True
         )
 
         # 3. Crear StorageContext
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-        # 4. Crear VectorStoreIndex e indexar
-        print("📤 Indexando nodos (esto puede tomar varios minutos)...")
+        # 4. Indexación por LOTES (Batching)
+        # LlamaIndex no tiene un "batch_size" directo en from_documents que controle la subida,
+        # así que lo hacemos manualmente insertando nodos poco a poco.
+        
+        batch_size = 200  # Tamaño del lote (seguro para evitar timeouts)
+        total_nodes = len(nodes)
+        total_batches = (total_nodes + batch_size - 1) // batch_size
+        
+        print(f"📤 Iniciando indexación por lotes (Total: {total_batches} batches)...")
+        
+        index = None
+        
+        for i in range(0, total_nodes, batch_size):
+            batch_nodes = nodes[i : i + batch_size]
+            current_batch = (i // batch_size) + 1
+            
+            print(f"   Processing batch {current_batch}/{total_batches} ({len(batch_nodes)} nodos)...")
+            
+            try:
+                if index is None:
+                    # Primer lote: Crea el índice inicial
+                    index = VectorStoreIndex(
+                        batch_nodes,
+                        storage_context=storage_context,
+                        embed_model=embed_model,
+                        show_progress=False
+                    )
+                else:
+                    # Lotes siguientes: Inserta en el índice existente
+                    index.insert_nodes(batch_nodes)
+                
+                print(f"   ✅ Batch {current_batch} completado.")
+                
+            except Exception as e:
+                print(f"   ❌ Error crítico en batch {current_batch}: {e}")
+                raise e  # Detenemos si hay error para no perder consistencia
 
-        index = VectorStoreIndex(
-            nodes,
-            storage_context=storage_context,
-            embed_model=embed_model,
-            show_progress=True
-        )
-
-        print(f"\n✅ {len(nodes)} nodos indexados exitosamente\n")
-
+        print(f"\n✅ Todos los {total_nodes} nodos indexados exitosamente.\n")
         return True
 
     except Exception as e:
-        print(f"❌ ERROR indexando nodos: {e}")
+        print(f"❌ ERROR GENERAL indexando nodos: {e}")
         import traceback
         traceback.print_exc()
         return False
-
-
 def verify_index():
     """Verifica que el índice semántico se haya creado correctamente."""
     print_header("Verificando Índice")

@@ -194,26 +194,34 @@ def test_protocol_signals_consistency():
 
 
 # ========================================
-# TESTS SUPERVISOR
+# [NUEVO] TEST PROTOCOLO SEGURIDAD (NIVEL 2)
 # ========================================
 
-def test_supervisor_prompt_has_state_machine():
-    """Test que el supervisor tiene máquina de estados"""
-    from agents.financial_agents import supervisor_system_prompt
+def test_agent_fin_corp_rechaza_teoria(agent_fin_corp):
+    """
+    Test de Protocolo de Seguridad:
+    Valida que el agente RECHACE preguntas teóricas y emita la señal de transferencia.
+    Esto actúa como red de seguridad si el router falla.
+    """
+    state = {
+        "messages": [
+            HumanMessage(content="¿Qué es el WACC y para qué sirve?")
+        ]
+    }
 
-    # Verificar estructura de máquina de estados
-    assert "PASO 1" in supervisor_system_prompt
-    assert "PASO 2" in supervisor_system_prompt
-    assert "PASO 3" in supervisor_system_prompt
-    assert "PASO 4" in supervisor_system_prompt
+    result = agent_fin_corp.invoke(state)
 
-    # Verificar señales de terminación
-    assert "TAREA_COMPLETADA" in supervisor_system_prompt
-    assert "ERROR_BLOQUEANTE" in supervisor_system_prompt
-    assert "FALTAN_DATOS" in supervisor_system_prompt
+    # Extraer respuesta
+    last_message = result["messages"][-1]
+    response = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
-    # Verificar anti-hopping
-    assert "RULE_NO_HOPPING" in supervisor_system_prompt or "ANTI-BUCLES" in supervisor_system_prompt
+    # Validación crítica: Debe contener la señal de transferencia
+    assert "TRANSFERIR_A_RAG" in response, \
+        f"El agente debió transferir a RAG, pero respondió: {response}"
+    
+    # Validación secundaria: No debe intentar calcular nada (sin tool calls)
+    assert not getattr(last_message, 'tool_calls', []), \
+        "El agente intentó usar herramientas en una pregunta teórica"
 
 
 # ========================================

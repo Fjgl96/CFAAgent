@@ -218,6 +218,36 @@ def test_graph_invoke_simple_query():
 
 
 # ========================================
+# [NUEVO] TEST MANEJO DE SEÑALES DE TRANSFERENCIA (NIVEL 3)
+# ========================================
+
+def test_supervisor_handle_transfer_signal():
+    """
+    Test de Manejo de Señales:
+    Valida que el supervisor reconozca 'TRANSFERIR_A_RAG' y redirija correctamente.
+    Esto asegura que no haya bucles si el agente especialista rechaza la tarea.
+    """
+    from graph.agent_graph import supervisor_node
+    
+    # Simular estado donde el Agente especialista pide ayuda a RAG
+    state = {
+        "messages": [
+            HumanMessage(content="¿Qué es el WACC?"),
+            AIMessage(content="Esta es una consulta teórica. TRANSFERIR_A_RAG")
+        ],
+        "error_count": 0,
+        "error_types": {},
+        "circuit_open": False
+    }
+
+    result = supervisor_node(state)
+
+    # El supervisor debe decidir ir al Agente_RAG
+    assert result["next_node"] == "Agente_RAG", \
+        f"Se esperaba 'Agente_RAG', obtuvo '{result['next_node']}'"
+
+
+# ========================================
 # RUNNER
 # ========================================
 
