@@ -1,7 +1,29 @@
 # rag/financial_rag_elasticsearch.py
 """
+⚠️ ⚠️ ⚠️ ADVERTENCIA - ARCHIVO OBSOLETO ⚠️ ⚠️ ⚠️
+
+ESTE ARCHIVO YA NO SE USA EN EL PROYECTO PRINCIPAL.
+
+El sistema RAG ahora se ejecuta como MICROSERVICIO independiente.
+- El microservicio está en: https://rag-search-m70x.onrender.com
+- La versión optimizada está en: rag/microservice_optimized.py
+
+CONFIGURACIÓN ACTUAL:
+- El proyecto principal hace llamadas HTTP al microservicio RAG
+- Ver agents/financial_agents.py (línea 64-72) para el cliente
+- Ver config.py (línea 137) para RAG_API_URL
+
+SI NECESITAS ACTUALIZAR EL MICROSERVICIO:
+1. Copia rag/microservice_optimized.py al proyecto del microservicio
+2. Reinicia el servidor del microservicio
+
+ESTE ARCHIVO SE MANTIENE SOLO COMO REFERENCIA/BACKUP.
+NO MODIFICAR ESTE ARCHIVO - USAR microservice_optimized.py
+
+===================================================================
+
 Sistema RAG - VERSIÓN ELASTICSEARCH CON OPENAI EMBEDDINGS
-Actualizado para LangChain 1.0+
+Actualizado para LangChain 1.0+ con optimizaciones de rendimiento
 
 Los usuarios consultan material financiero indexado en Elasticsearch.
 El admin indexa documentos con generate_index.py

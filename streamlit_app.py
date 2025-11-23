@@ -77,22 +77,36 @@ def verify_system_health():
         health_status["llm"]["details"] = str(e)
         logger.error(f"❌ LLM falló: {e}")
     
-    # Check 3: RAG
+    # Check 3: RAG Microservice
+    # OPTIMIZACIÓN: Ahora RAG es microservicio, hacemos health check al endpoint
     try:
-        from rag.financial_rag_elasticsearch import rag_system
-        if rag_system:
-            rag_health = rag_system.get_health_status()
-            health_status["rag"]["status"] = rag_health["connection_status"] == "connected"
-            health_status["rag"]["details"] = (
-                f"Status: {rag_health['connection_status']}"
-            )
-            logger.info(f"✅ RAG status: {rag_health['connection_status']}")
+        from config import RAG_API_URL
+        import requests
+
+        if RAG_API_URL:
+            # Intentar ping al microservicio con timeout corto
+            health_endpoint = f"{RAG_API_URL.rstrip('/')}/health"
+            try:
+                response = requests.get(health_endpoint, timeout=5)
+                if response.status_code == 200:
+                    health_status["rag"]["status"] = True
+                    health_status["rag"]["details"] = f"Microservicio OK ({RAG_API_URL})"
+                    logger.info(f"✅ RAG Microservicio: OK")
+                else:
+                    health_status["rag"]["details"] = f"HTTP {response.status_code}"
+                    logger.warning(f"⚠️ RAG Microservicio: HTTP {response.status_code}")
+            except requests.exceptions.Timeout:
+                health_status["rag"]["details"] = "Timeout (>5s)"
+                logger.warning("⚠️ RAG Microservicio: Timeout")
+            except requests.exceptions.ConnectionError:
+                health_status["rag"]["details"] = "No se pudo conectar"
+                logger.warning("⚠️ RAG Microservicio: Sin conexión")
         else:
-            health_status["rag"]["details"] = "Sistema no inicializado"
-            logger.warning("⚠️ RAG no inicializado")
+            health_status["rag"]["details"] = "RAG_API_URL no configurada"
+            logger.warning("⚠️ RAG_API_URL no configurada")
     except Exception as e:
         health_status["rag"]["details"] = str(e)
-        logger.error(f"❌ RAG falló: {e}")
+        logger.error(f"❌ RAG health check falló: {e}")
     
     # Check 4: Grafo
     try:
