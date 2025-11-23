@@ -278,13 +278,142 @@ def enriquecer_query_bilingue(consulta: str) -> str:
 
 
 # ========================================
+# HELPER: GENERAR VARIACIONES DE QUERY
+# ========================================
+
+def generar_variaciones_query(consulta: str) -> List[str]:
+    """
+    Genera variaciones de la query para búsqueda multi-query sin LLM.
+
+    Estrategias:
+    1. Query original (en español)
+    2. Query enriquecida con términos bilingües
+    3. Query con palabras clave extraídas (solo sustantivos técnicos)
+
+    Args:
+        consulta: Query original
+
+    Returns:
+        Lista de 2-3 variaciones de query
+    """
+    variaciones = []
+
+    # Variación 1: Query original
+    variaciones.append(consulta)
+
+    # Variación 2: Query enriquecida con términos bilingües
+    consulta_enriquecida = enriquecer_query_bilingue(consulta)
+    if consulta_enriquecida != consulta:
+        variaciones.append(consulta_enriquecida)
+
+    # Variación 3: Extraer palabras clave (acrónimos y sustantivos técnicos)
+    import re
+    # Buscar acrónimos (2-5 letras mayúsculas)
+    acronimos = re.findall(r'\b[A-Z]{2,5}\b', consulta)
+    # Buscar palabras técnicas comunes en el diccionario
+    palabras_query = consulta.lower().split()
+    palabras_tecnicas = []
+    for palabra in palabras_query:
+        # Buscar en TERMINOS_TECNICOS
+        for key, synonyms in TERMINOS_TECNICOS.items():
+            if any(palabra in term.lower() for term in synonyms):
+                # Agregar la versión en inglés (primera en la lista de sinónimos)
+                if synonyms[0] not in palabras_tecnicas:
+                    palabras_tecnicas.append(synonyms[0])
+                break
+
+    # Combinar acrónimos + palabras técnicas
+    if acronimos or palabras_tecnicas:
+        query_keywords = " ".join(acronimos + palabras_tecnicas)
+        if query_keywords and query_keywords not in variaciones:
+            variaciones.append(query_keywords)
+
+    return variaciones
+
+
+def buscar_multi_query_paralelo(consulta: str, k_per_query: int = 2) -> List[Document]:
+    """
+    Ejecuta múltiples variaciones de búsqueda EN PARALELO y combina resultados.
+
+    OPTIMIZACIÓN CLAVE:
+    - Genera 2-3 variaciones de query SIN LLM adicional
+    - Ejecuta búsquedas en paralelo usando ThreadPoolExecutor
+    - Deduplica resultados por contenido
+    - Retorna top-k más relevantes
+
+    Args:
+        consulta: Query original del usuario
+        k_per_query: Documentos a buscar por cada variación (default: 2)
+
+    Returns:
+        Lista combinada de documentos únicos (max 4-6 resultados)
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print(f"🚀 Multi-Query: Generando variaciones de '{consulta}'...")
+
+    # Generar variaciones
+    variaciones = generar_variaciones_query(consulta)
+    print(f"   Variaciones generadas: {len(variaciones)}")
+    for i, var in enumerate(variaciones, 1):
+        print(f"   {i}. {var[:60]}...")
+
+    # Ejecutar búsquedas en paralelo
+    resultados_combinados = []
+    contenidos_vistos = set()  # Para deduplicación
+
+    def buscar_variacion(query_var):
+        """Función helper para búsqueda en thread"""
+        try:
+            docs = rag_system.search_documents(query_var, k=k_per_query)
+            return docs
+        except Exception as e:
+            print(f"❌ Error en búsqueda de variación '{query_var[:30]}...': {e}")
+            return []
+
+    print(f"🔍 Ejecutando {len(variaciones)} búsquedas en paralelo...")
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Enviar todas las búsquedas en paralelo
+        future_to_query = {
+            executor.submit(buscar_variacion, var): var
+            for var in variaciones
+        }
+
+        # Recolectar resultados a medida que completan
+        for future in as_completed(future_to_query):
+            query_var = future_to_query[future]
+            try:
+                docs = future.result()
+
+                # Deduplicar por contenido
+                for doc in docs:
+                    # Hash del contenido para detectar duplicados
+                    content_hash = hash(doc.page_content[:200])  # Primeros 200 chars
+                    if content_hash not in contenidos_vistos:
+                        contenidos_vistos.add(content_hash)
+                        resultados_combinados.append(doc)
+
+            except Exception as e:
+                print(f"❌ Error procesando resultados de '{query_var[:30]}...': {e}")
+
+    print(f"✅ Multi-Query completado: {len(resultados_combinados)} documentos únicos encontrados")
+
+    # Retornar top-k resultados (máximo 6 para no saturar)
+    return resultados_combinados[:6]
+
+
+# ========================================
 # TOOL PARA EL AGENTE
 # ========================================
 
 @tool
 def buscar_documentacion_financiera(consulta: str) -> str:
     """
-    Busca información en material financiero indexado en Elasticsearch.
+    Busca información en material financiero usando MULTI-QUERY INTELIGENTE.
+
+    OPTIMIZACIÓN: Ejecuta 2-3 variaciones de búsqueda en PARALELO para mejorar recall
+    sin aumentar latencia (búsquedas concurrentes vs secuenciales).
 
     Args:
         consulta: La pregunta o tema a buscar.
@@ -292,14 +421,11 @@ def buscar_documentacion_financiera(consulta: str) -> str:
     Returns:
         Contexto relevante del material de estudio.
     """
-    print(f"\n🔍 RAG Tool invocado con consulta: '{consulta}'")
+    print(f"\n🔍 RAG Tool (Multi-Query) invocado con consulta: '{consulta}'")
 
-    # MEJORA: Enriquecer query con términos bilingües
-    consulta_enriquecida = enriquecer_query_bilingue(consulta)
+    # OPTIMIZACIÓN: Multi-Query en paralelo (2-3 búsquedas concurrentes)
+    docs = buscar_multi_query_paralelo(consulta, k_per_query=2)
 
-    # Buscar documentos relevantes con query enriquecida
-    docs = rag_system.search_documents(consulta_enriquecida, k=3)
-    
     if not docs:
         return (
             "No encontré información relevante en el material de estudio indexado. "
@@ -311,30 +437,30 @@ def buscar_documentacion_financiera(consulta: str) -> str:
             "Intenta reformular tu pregunta o consulta directamente al "
             "agente especializado correspondiente."
         )
-    
-    # Formatear resultado
+
+    # Formatear resultado (limitado a 4 fragmentos para no saturar)
     context_parts = []
-    for i, doc in enumerate(docs, 1):
+    for i, doc in enumerate(docs[:4], 1):  # Máximo 4 fragmentos
         source = doc.metadata.get('source', 'Desconocido')
         content = doc.page_content.strip()
-        
+
         # Extraer nombre del archivo
         if source != 'Desconocido':
             from pathlib import Path
             source_name = Path(source).name
         else:
             source_name = source
-        
+
         # Metadata adicional
         cfa_level = doc.metadata.get('cfa_level', 'N/A')
-        
+
         context_parts.append(
             f"--- Fragmento {i} ---\n"
             f"Fuente: {source_name}\n"
             f"CFA Level: {cfa_level}\n"
             f"Contenido:\n{content}"
         )
-    
+
     full_context = "\n\n".join(context_parts)
 
     return f"📚 Información encontrada en el material de estudio:\n\n{full_context}"
