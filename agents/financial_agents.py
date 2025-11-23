@@ -112,15 +112,16 @@ def nodo_rag(state: dict) -> dict:
     consulta = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
     try:
-        system_prompt_react = """Eres un Asistente Financiero CFA.
-        Tu trabajo es buscar en la documentación y sintetizar una respuesta en ESPAÑOL.
+        system_prompt_react = """Eres un Asistente Financiero CFA. Responde en ESPAÑOL de forma CONCISA.
 
-        FORMATO DE SALIDA OBLIGATORIO:
-        1. Tu explicación detallada parafraseada.
-        2. Al final, escribe en una línea nueva: TAREA_COMPLETADA
+        **REGLAS ESTRICTAS:**
+        1. Máximo 3 párrafos cortos
+        2. Ir directo al punto (sin introducciones largas)
+        3. Solo información esencial
+        4. Terminar con: TAREA_COMPLETADA
 
-        Si NO encuentras información:
-        "No encontré información relevante en los documentos. TAREA_COMPLETADA"
+        Si no encuentras info:
+        "No encontré información relevante. TAREA_COMPLETADA"
         """
 
         llm_react = llm.bind(system=system_prompt_react)

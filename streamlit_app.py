@@ -263,6 +263,10 @@ for message in st.session_state.messages:
 # USER INPUT
 # ========================================
 
+i# ========================================
+# USER INPUT CON STREAMING
+# ========================================
+
 if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 25k], tasa 12%"):
     
     # Agregar mensaje del usuario
@@ -276,77 +280,86 @@ if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 2
     graph_input = {"messages": [HumanMessage(content=prompt)]}
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     
-    # Ejecutar grafo
+    # ========================================
+    # EJECUTAR GRAFO CON STREAMING
+    # ========================================
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        full_response = ""
         
         with st.spinner("🧠 Procesando..."):
-            final_response_content = ""
-            
             try:
-                # Log inicio de procesamiento
+                # Log inicio
                 log_system_event('query', details={
-                'query': prompt[:200],
-                'thread_id': st.session_state.thread_id
+                    'query': prompt[:200],
+                    'thread_id': st.session_state.thread_id
                 })
                 
-                # Invocar grafo
-                final_state = compiled_graph.invoke(graph_input, config=config)
-                
-                # Extraer respuesta final
-                if final_state and "messages" in final_state and final_state["messages"]:
-                    for msg in reversed(final_state["messages"]):
-                        is_final_ai_msg = isinstance(msg, AIMessage) and not getattr(msg, 'tool_calls', [])
-                        if is_final_ai_msg:
-                            content = msg.content
-                            if isinstance(content, str):
-                                final_response_content = content
-                            elif isinstance(content, list):
-                                text_parts = []
-                                for part in content:
-                                    if isinstance(part, dict) and 'text' in part:
-                                        text_parts.append(part['text'])
-                                    elif isinstance(part, str):
-                                        text_parts.append(part)
-                                final_response_content = "\n".join(text_parts).strip()
+                # STREAMING: Iterar sobre eventos del grafo
+                for event in compiled_graph.stream(graph_input, config=config):
+                    
+                    # Extraer mensajes del evento
+                    if "messages" in event:
+                        for msg in event["messages"]:
                             
-                            if final_response_content:
-                                break
+                            # Solo procesar mensajes AI finales (sin tool calls)
+                            if isinstance(msg, AIMessage) and not getattr(msg, 'tool_calls', []):
+                                
+                                # Extraer contenido del mensaje
+                                chunk_text = ""
+                                if isinstance(msg.content, str):
+                                    chunk_text = msg.content
+                                elif isinstance(msg.content, list):
+                                    for part in msg.content:
+                                        if isinstance(part, dict) and 'text' in part:
+                                            chunk_text += part['text']
+                                        elif isinstance(part, str):
+                                            chunk_text += part
+                                
+                                # Si hay contenido nuevo, actualizar
+                                if chunk_text:
+                                    full_response = chunk_text
+                                    
+                                    # MOSTRAR EN TIEMPO REAL con cursor parpadeante
+                                    message_placeholder.markdown(full_response + "▌")
                 
-                if not final_response_content:
+                # Remover cursor al finalizar
+                if full_response:
+                    message_placeholder.markdown(full_response)
+                    final_response_content = full_response
+                    logger.info(f"✅ Respuesta generada ({len(full_response)} chars)")
+                else:
+                    # Fallback si no se generó respuesta
                     final_response_content = (
                         "Lo siento, no pude procesar tu solicitud completamente. "
                         "¿Podrías reformular o proporcionar más detalles?"
                     )
+                    message_placeholder.markdown(final_response_content)
                     logger.warning("⚠️ No se encontró respuesta final válida")
-                
-                logger.info(f"✅ Respuesta generada ({len(final_response_content)} chars)")
             
             except Exception as e:
+                # Manejo de errores
                 final_response_content = (
                     "❌ Ocurrió un error inesperado al procesar tu solicitud. "
                     "Por favor, intenta de nuevo."
                 )
-                logger.error(f"❌ Error en runtime: {e}", exc_info=True)
+                message_placeholder.markdown(final_response_content)
+                logger.error(f"❌ Error en streaming: {e}", exc_info=True)
                 
-                # Log error evento
+                # Log error
                 log_system_event('error', details={
-                'error_type': 'runtime_error',
-                'error_message': str(e),
-                'thread_id': st.session_state.thread_id
+                    'error_type': 'streaming_error',
+                    'error_message': str(e),
+                    'thread_id': st.session_state.thread_id
                 })
                 
                 st.error(
                     "Se produjo un error técnico. El equipo ha sido notificado. "
                     "Por favor, intenta reformular tu consulta."
                 )
-            
-            # Mostrar respuesta
-            if final_response_content:
-                message_placeholder.markdown(final_response_content)
     
     # Guardar en historial
-    if final_response_content:
+    if 'final_response_content' in locals() and final_response_content:
         st.session_state.messages.append({
             "role": "assistant", 
             "content": final_response_content
