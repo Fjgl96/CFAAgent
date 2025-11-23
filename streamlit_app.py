@@ -262,9 +262,8 @@ for message in st.session_state.messages:
 # ========================================
 # USER INPUT
 # ========================================
-
 # ========================================
-# USER INPUT CON STREAMING
+# USER INPUT CON STREAMING POR NODOS
 # ========================================
 
 if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 25k], tasa 12%"):
@@ -281,22 +280,45 @@ if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 2
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     
     # ========================================
-    # EJECUTAR GRAFO CON STREAMING
+    # EJECUTAR GRAFO CON STREAMING POR NODOS
     # ========================================
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        status_placeholder = st.empty()
         full_response = ""
         
-        with st.spinner("🧠 Procesando..."):
-            try:
-                # Log inicio
-                log_system_event('query', details={
-                    'query': prompt[:200],
-                    'thread_id': st.session_state.thread_id
-                })
+        try:
+            # Log inicio
+            log_system_event('query', details={
+                'query': prompt[:200],
+                'thread_id': st.session_state.thread_id
+            })
+            
+            # Mostrar spinner inicial
+            with st.spinner("🧠 Procesando..."):
                 
                 # STREAMING: Iterar sobre eventos del grafo
                 for event in compiled_graph.stream(graph_input, config=config):
+                    
+                    # Identificar nodo activo y mostrar status
+                    event_keys = list(event.keys())
+                    
+                    if "Supervisor" in event_keys:
+                        status_placeholder.caption("🧭 Analizando consulta...")
+                    elif "Agente_RAG" in event_keys:
+                        status_placeholder.caption("📚 Buscando en material de estudio...")
+                    elif "Agente_Renta_Fija" in event_keys:
+                        status_placeholder.caption("🏦 Calculando Renta Fija...")
+                    elif "Agente_Finanzas_Corp" in event_keys:
+                        status_placeholder.caption("💼 Calculando Finanzas Corporativas...")
+                    elif "Agente_Portafolio" in event_keys:
+                        status_placeholder.caption("📊 Calculando Portafolio...")
+                    elif "Agente_Equity" in event_keys:
+                        status_placeholder.caption("📈 Calculando Equity...")
+                    elif "Agente_Derivados" in event_keys:
+                        status_placeholder.caption("📉 Calculando Derivados...")
+                    elif "Agente_Ayuda" in event_keys:
+                        status_placeholder.caption("ℹ️ Preparando guía de ayuda...")
                     
                     # Extraer mensajes del evento
                     if "messages" in event:
@@ -316,47 +338,53 @@ if prompt := st.chat_input("Ej: Calcula VAN: inversión 50k, flujos [15k, 20k, 2
                                         elif isinstance(part, str):
                                             chunk_text += part
                                 
-                                # Si hay contenido nuevo, actualizar
-                                if chunk_text:
+                                # Actualizar respuesta si hay contenido nuevo
+                                if chunk_text and chunk_text != full_response:
                                     full_response = chunk_text
                                     
-                                    # MOSTRAR EN TIEMPO REAL con cursor parpadeante
+                                    # MOSTRAR actualización con cursor
+                                    status_placeholder.caption("✍️ Generando respuesta...")
                                     message_placeholder.markdown(full_response + "▌")
-                
-                # Remover cursor al finalizar
-                if full_response:
-                    message_placeholder.markdown(full_response)
-                    final_response_content = full_response
-                    logger.info(f"✅ Respuesta generada ({len(full_response)} chars)")
-                else:
-                    # Fallback si no se generó respuesta
-                    final_response_content = (
-                        "Lo siento, no pude procesar tu solicitud completamente. "
-                        "¿Podrías reformular o proporcionar más detalles?"
-                    )
-                    message_placeholder.markdown(final_response_content)
-                    logger.warning("⚠️ No se encontró respuesta final válida")
             
-            except Exception as e:
-                # Manejo de errores
+            # Limpiar status y remover cursor
+            status_placeholder.empty()
+            
+            if full_response:
+                message_placeholder.markdown(full_response)
+                final_response_content = full_response
+                logger.info(f"✅ Respuesta generada ({len(full_response)} chars)")
+            else:
+                # Fallback si no se generó respuesta
                 final_response_content = (
-                    "❌ Ocurrió un error inesperado al procesar tu solicitud. "
-                    "Por favor, intenta de nuevo."
+                    "Lo siento, no pude procesar tu solicitud completamente. "
+                    "¿Podrías reformular o proporcionar más detalles?"
                 )
                 message_placeholder.markdown(final_response_content)
-                logger.error(f"❌ Error en streaming: {e}", exc_info=True)
-                
-                # Log error
-                log_system_event('error', details={
-                    'error_type': 'streaming_error',
-                    'error_message': str(e),
-                    'thread_id': st.session_state.thread_id
-                })
-                
-                st.error(
-                    "Se produjo un error técnico. El equipo ha sido notificado. "
-                    "Por favor, intenta reformular tu consulta."
-                )
+                logger.warning("⚠️ No se encontró respuesta final válida")
+        
+        except Exception as e:
+            # Limpiar status en caso de error
+            status_placeholder.empty()
+            
+            # Manejo de errores
+            final_response_content = (
+                "❌ Ocurrió un error inesperado al procesar tu solicitud. "
+                "Por favor, intenta de nuevo."
+            )
+            message_placeholder.markdown(final_response_content)
+            logger.error(f"❌ Error en streaming: {e}", exc_info=True)
+            
+            # Log error
+            log_system_event('error', details={
+                'error_type': 'streaming_error',
+                'error_message': str(e),
+                'thread_id': st.session_state.thread_id
+            })
+            
+            st.error(
+                "Se produjo un error técnico. El equipo ha sido notificado. "
+                "Por favor, intenta reformular tu consulta."
+            )
     
     # Guardar en historial
     if 'final_response_content' in locals() and final_response_content:
