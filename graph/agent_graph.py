@@ -25,9 +25,7 @@ from agents.financial_agents import (
     agent_nodes, RouterSchema
 )
 
-# Importar sistema de routing
-from routing.langchain_routing import create_routing_node
-from pathlib import Path
+# Routing eliminado - ahora usamos clasificación LLM simple
 
 # Importar logger
 try:
@@ -179,35 +177,23 @@ def _handle_circuit_breaker_activation(error_types: dict, error_count: int) -> d
 
 
 def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
-    """Ejecuta la lógica de routing (Hybrid or LLM)."""
+    """Ejecuta la lógica de routing usando supervisor LLM directo."""
     next_node_decision = "FINISH"
-    routing_method = "unknown"
-    routing_confidence = 0.0
+    routing_method = "supervisor_llm"
+    routing_confidence = 0.95
 
     try:
-        global ROUTING_NODE
-        if ROUTING_NODE:
-            result = ROUTING_NODE(state)
-            next_node_decision = result.get('next_node', 'FINISH')
-            routing_method = result.get('routing_method', 'unknown')
-            routing_confidence = result.get('routing_confidence', 0.0)
-            logger.info(f"🧭 Routing (Hybrid): {next_node_decision}")
-        else:
-            logger.warning("⚠️ Usando Supervisor LLM directo (Routing no init)")
-            from agents.financial_agents import supervisor_llm, supervisor_system_prompt
-            
-            supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
-            route = supervisor_llm.invoke(supervisor_messages)
-            
-            next_node_decision = route.next_agent if hasattr(route, 'next_agent') else "FINISH"
-            routing_method = "llm_direct"
-            routing_confidence = 0.95
-            logger.info(f"🧭 Routing (LLM): {next_node_decision}")
+        from agents.financial_agents import supervisor_llm, supervisor_system_prompt
+
+        supervisor_messages = [HumanMessage(content=supervisor_system_prompt)] + messages
+        route = supervisor_llm.invoke(supervisor_messages)
+
+        next_node_decision = route.next_agent if hasattr(route, 'next_agent') else "FINISH"
+        logger.info(f"🧭 Supervisor LLM decide: {next_node_decision}")
 
     except Exception as e:
-        logger.error(f"❌ Error en routing: {e}", exc_info=True)
+        logger.error(f"❌ Error en supervisor: {e}", exc_info=True)
         next_node_decision = "FINISH"
-        routing_method = "error_fallback"
 
     return next_node_decision, routing_method, routing_confidence
 
@@ -217,54 +203,109 @@ def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
 # ========================================
 
 def supervisor_node(state: AgentState) -> dict:
-    """Nodo orquestador principal."""
-    logger.info("--- SUPERVISOR ---")
+    """Supervisor con clasificación simple teoría/práctica/ayuda."""
+    logger.info("--- SUPERVISOR (CLASIFICACIÓN SIMPLE) ---")
 
+    messages = state.get('messages', [])
     error_count = state.get('error_count', 0)
     error_types = state.get('error_types', {})
-    messages = state['messages']
 
-    # 1. Chequeo Circuit Breaker
+    # 1. Chequeo Circuit Breaker (mantener lógica actual)
     cb_status = _check_circuit_breaker_status(state)
-    if cb_status: return cb_status
+    if cb_status:
+        return cb_status
 
-    # 2. Análisis de Errores
-    is_error, error_type, delta_count, delta_types = _analyze_last_message(messages)
+    # 2. Si último mensaje no es del usuario, analizar errores
+    if not messages or not isinstance(messages[-1], HumanMessage):
+        is_error, error_type, delta_count, delta_types = _analyze_last_message(messages)
 
-    if is_error:
-        error_count += delta_count
-        for k, v in delta_types.items():
-            error_types[k] = error_types.get(k, 0) + v
-    elif error_type == 'success' and error_count > 0:
-        # Resetear si hubo éxito
-        error_count = 0
-        error_types = {}
+        if is_error:
+            error_count += delta_count
+            for k, v in delta_types.items():
+                error_types[k] = error_types.get(k, 0) + v
 
-    # 3. Activación Circuit Breaker
-    if is_error and should_open_circuit(error_types, error_count):
-        activation = _handle_circuit_breaker_activation(error_types, error_count)
-        activation.update({"error_count": error_count, "error_types": error_types})
-        return activation
+            if should_open_circuit(error_types, error_count):
+                activation = _handle_circuit_breaker_activation(error_types, error_count)
+                activation.update({"error_count": error_count, "error_types": error_types})
+                return activation
 
-    # 4. Routing
-    next_node, method, confidence = _execute_routing_decision(state, messages)
+        return {"next_node": "FINISH", "error_count": error_count, "error_types": error_types}
 
-    # 5. Resetear si el routing cambia de nodo (éxito implícito)
-    prev_node = state.get('next_node')
-    if not is_error and (next_node == "FINISH" or next_node != prev_node):
-        if error_count > 0:
-            error_count = 0
-            error_types = {}
+    # 3. CLASIFICACIÓN SIMPLE (NUEVA LÓGICA)
+    user_query = messages[-1].content
 
-    return {
-        "next_node": next_node,
-        "error_count": error_count,
-        "error_types": error_types,
-        "circuit_open": False,
-        "last_error_time": datetime.now().timestamp() if is_error else 0,
-        "routing_method": method,
-        "routing_confidence": confidence
-    }
+    prompt_clasificacion = """Clasifica esta consulta financiera en UNA categoría:
+
+**TEORICA**: Si pregunta conceptos, definiciones, explicaciones
+- Palabras clave: "qué es", "explica", "define", "concepto", "significado", "what is", "explain", "define"
+- Ejemplo: "¿Qué es el WACC?", "Explica duration modificada"
+
+**PRACTICA**: Si solicita cálculos, tiene números, pide resultados específicos
+- Palabras clave: "calcula", "determina", "obtén", "encuentra", contiene números
+- Ejemplo: "Calcula VAN: inversión 100k, flujos [30k,40k], tasa 10%"
+
+**AYUDA**: Si pregunta qué puede hacer el sistema o pide ayuda
+- Palabras clave: "ayuda", "qué puedes hacer", "ejemplos", "help"
+- Ejemplo: "¿Qué puedes calcular?", "Ayuda"
+
+Consulta: "{query}"
+
+Responde SOLO UNA PALABRA en mayúsculas: TEORICA, PRACTICA o AYUDA
+No des explicaciones, solo la categoría."""
+
+    clasificacion_msg = prompt_clasificacion.format(query=user_query)
+
+    try:
+        # Usar LLM con temperatura 0 para determinismo
+        from config import get_llm
+        llm_clasificador = get_llm(temperature=0.0)
+        clasificacion = llm_clasificador.invoke(clasificacion_msg).content.strip().upper()
+        logger.info(f"🏷️ Clasificación: {clasificacion}")
+    except Exception as e:
+        logger.error(f"❌ Error en clasificación: {e}")
+        clasificacion = "PRACTICA"  # Fallback seguro
+
+    # 4. ROUTING BASADO EN CLASIFICACIÓN
+    if "TEORICA" in clasificacion or "TEÓRICA" in clasificacion:
+        logger.info("📚 Ruta: TEORICA → Agente_RAG")
+        return {
+            "next_node": "Agente_RAG",
+            "error_count": 0,  # Reset en nuevo intent
+            "error_types": {},
+            "routing_method": "clasificacion_llm",
+            "routing_confidence": 0.95
+        }
+
+    elif "AYUDA" in clasificacion:
+        logger.info("ℹ️ Ruta: AYUDA → Agente_Ayuda")
+        return {
+            "next_node": "Agente_Ayuda",
+            "error_count": 0,
+            "error_types": {},
+            "routing_method": "clasificacion_llm",
+            "routing_confidence": 0.95
+        }
+
+    else:  # PRACTICA (default)
+        logger.info("🔢 Ruta: PRACTICA → Supervisor decide agente especialista")
+
+        # Usar lógica supervisor original para decidir agente especialista
+        next_node, method, confidence = _execute_routing_decision(state, messages)
+
+        # Reset errores si routing cambió
+        prev_node = state.get('next_node')
+        if next_node == "FINISH" or next_node != prev_node:
+            if error_count > 0:
+                error_count = 0
+                error_types = {}
+
+        return {
+            "next_node": next_node,
+            "error_count": error_count,
+            "error_types": error_types,
+            "routing_method": "clasificacion_practica",
+            "routing_confidence": confidence
+        }
 
 
 # ========================================
@@ -319,31 +360,13 @@ def build_graph():
 
 
 # ========================================
-# INICIALIZACIÓN ROUTING
+# INICIALIZACIÓN DEL GRAFO
 # ========================================
-
-ROUTING_NODE = None
-
-def initialize_routing_system():
-    global ROUTING_NODE
-    try:
-        config_path = Path(__file__).parent.parent / "config" / "routing_patterns.yaml"
-        ROUTING_NODE = create_routing_node(
-            supervisor_llm=supervisor_llm,
-            supervisor_prompt=supervisor_system_prompt,
-            threshold=0.8,
-            config_path=str(config_path) if config_path.exists() else None
-        )
-        logger.info("✅ Routing System Inicializado")
-        return ROUTING_NODE
-    except Exception as e:
-        logger.error(f"❌ Routing Init Error: {e}")
-        return None
 
 # Inicialización Global
 try:
     compiled_graph = build_graph()
-    initialize_routing_system()
+    logger.info("✅ Grafo compilado (routing simplificado con clasificación LLM)")
 except Exception as e:
     logger.error(f"🔥 Error Fatal en Graph Init: {e}")
     st.error("Error crítico del sistema.")
