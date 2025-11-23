@@ -432,14 +432,15 @@ def build_graph():
 
     # Aristas de retorno: agentes → supervisor
     for name in agent_nodes:
-        if name in ["Agente_Ayuda", "Agente_Sintesis_RAG"]:
-            # Ayuda y Síntesis van directo al final (no vuelven al supervisor)
+        if name in ["Agente_Ayuda", "Agente_RAG"]:
+            # Ayuda y RAG van directo al final (respuesta completa ya generada)
+            # OPTIMIZACIÓN: RAG ReAct ya sintetiza la respuesta, no necesita nodo adicional
             workflow.add_edge(name, END)
             logger.debug(f"   {name} → END")
-        elif name == "Agente_RAG":
-            # RAG va DIRECTO a SÍNTESIS
-            workflow.add_edge(name, "Agente_Sintesis_RAG")
-            logger.debug(f"   {name} → Agente_Sintesis_RAG (Directo)")
+        elif name == "Agente_Sintesis_RAG":
+            # Síntesis RAG (deprecado - mantenido solo para compatibilidad)
+            workflow.add_edge(name, END)
+            logger.debug(f"   {name} → END (deprecado)")
         else:
             # Agentes normales vuelven al supervisor
             workflow.add_edge(name, "Supervisor")
