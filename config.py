@@ -134,7 +134,7 @@ def load_api_key(secret_name: str, env_var_name: str, required: bool = True) -> 
 ANTHROPIC_API_KEY = load_api_key("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", required=True)
 LANGSMITH_API_KEY = load_api_key("LANGSMITH_API_KEY", "LANGSMITH_API_KEY", required=False)
 OPENAI_API_KEY = load_api_key("OPENAI_API_KEY", "OPENAI_API_KEY", required=True)  # ⚡ NUEVO
-RAG_API_URL = "https://rag-search-m70x.onrender.com" # ⚡ NUEVO
+RAG_API_URL = "https://rag-service-740905672912.us-central1.run.app/" # ⚡ NUEVO
 # ========================================
 # LANGSMITH CONFIGURATION
 # ========================================
