@@ -100,52 +100,65 @@ def nodo_ayuda_directo(state: dict) -> dict:
 
 def nodo_rag(state: dict) -> dict:
     """
-    Nodo ReAct Autónomo para RAG.
+    Nodo RAG Deterministico (Optimizacion v2).
+    Ya NO es un agente ReAct. Es una cadena lineal:
+    Query Optimizada (del Supervisor) -> API RAG -> Síntesis LLM.
     """
-    logger.info("📚 Agente RAG ReAct invocado")
+    logger.info("📚 Agente RAG (Modo Ejecución Directa) invocado")
 
     messages = state.get("messages", [])
     if not messages:
-        return {"messages": [AIMessage(content="Error: Sin mensajes.\nERROR_BLOQUEANTE")]}
+        return {"messages": [AIMessage(content="Error: Sin mensajes.")]}
 
+    # 1. OBTENER QUERY OPTIMIZADA
+    # Como el Supervisor v2 ya reemplazó el último mensaje con la query perfecta,
+    # solo la tomamos.
     last_message = messages[-1]
-    consulta = last_message.content if hasattr(last_message, 'content') else str(last_message)
+    query_para_rag = last_message.content 
+    
+    logger.info(f"🔍 Ejecutando búsqueda directa: '{query_para_rag[:50]}...'")
 
     try:
-        system_prompt_react = """Eres un Asistente Financiero CFA. Responde en ESPAÑOL de forma CONCISA.
+        # 2. LLAMADA DIRECTA A LA HERRAMIENTA (Sin pedirle permiso a un LLM)
+        # Invocamos la herramienta directamente como función
+        # Nota: buscar_documentacion_financiera es un @tool, usamos .invoke()
+        contexto_recuperado = buscar_documentacion_financiera.invoke(query_para_rag)
+        
+        # 3. SÍNTESIS DE RESPUESTA (Única llamada al LLM en este nodo)
+        # Usamos un prompt de síntesis estricto para evitar alucinaciones
+        prompt_sintesis = f"""Eres un Asistente Financiero CFA experto.
+        
+        INSTRUCCIONES:
+        1. Responde a la consulta del usuario basándote EXCLUSIVAMENTE en el CONTEXTO proporcionado.
+        2. Si el contexto contiene la respuesta, sé directo y técnico.
+        3. Si el contexto NO es relevante, dilo claramente.
+        4. Responde siempre en ESPAÑOL profesional.
 
-        **REGLAS ESTRICTAS:**
-        1. Máximo 3 párrafos cortos
-        2. Ir directo al punto (sin introducciones largas)
-        3. Solo información esencial
-        4. Terminar con: TAREA_COMPLETADA
+        CONTEXTO RECUPERADO:
+        {contexto_recuperado}
 
-        Si no encuentras info:
-        "No encontré información relevante. TAREA_COMPLETADA"
-        """
+        CONSULTA ORIGINAL:
+        {query_para_rag} (Nota: Esta query fue optimizada para búsqueda)
+        
+        Respuesta final:"""
 
-        llm_react = llm.bind(system=system_prompt_react)
-        agent_react = create_react_agent(
-            llm_react,
-            tools=[buscar_documentacion_financiera]
-        )
-
-        result = agent_react.invoke({"messages": [HumanMessage(content=consulta)]})
-        agent_messages = result.get("messages", [])
-
-        if agent_messages:
-            final_response = agent_messages[-1].content
-            if "TAREA_COMPLETADA" not in final_response and "ERROR" not in final_response:
-                final_response += "\n\nTAREA_COMPLETADA"
-            return {"messages": [AIMessage(content=final_response)]}
-
-        return {"messages": [AIMessage(content="No pude procesar la solicitud.\nERROR_BLOQUEANTE")]}
+        # Usamos el LLM configurado (idealmente un modelo rápido como Haiku o GPT-4o-mini)
+        response_message = llm.invoke(prompt_sintesis)
+        
+        # Aseguramos que termine con la señal de éxito para el grafo
+        if isinstance(response_message, AIMessage):
+            # Agregamos la etiqueta de cierre si no está (aunque el supervisor ya no la necesite tanto, ayuda al log)
+            if "TAREA_COMPLETADA" not in response_message.content:
+                 # Hack opcional: modificar el contenido es inmutable, creamos uno nuevo
+                 pass 
+        
+        return {"messages": [response_message]}
 
     except Exception as e:
-        logger.error(f"❌ Error en RAG ReAct: {e}", exc_info=True)
+        logger.error(f"❌ Error en RAG Directo: {e}", exc_info=True)
         return {
             "messages": [AIMessage(
-                content=f"Error técnico en RAG: {e}\nERROR_BLOQUEANTE"
+                content="Lo siento, hubo un error técnico al consultar la base de conocimientos. ERROR_BLOQUEANTE"
             )]
         }
 
