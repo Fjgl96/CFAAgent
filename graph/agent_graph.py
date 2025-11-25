@@ -386,14 +386,25 @@ def build_graph():
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
             import psycopg_pool
-            pool = psycopg_pool.ConnectionPool(conninfo=get_postgres_uri(), min_size=1, max_size=10)
+            
+            # 🔧 CORRECCIÓN: Configurar autocommit=True para permitir operaciones DDL (como crear índices)
+            connection_kwargs = {
+                "autocommit": True,
+                "prepare_threshold": 0,
+            }
+
+            pool = psycopg_pool.ConnectionPool(
+                conninfo=get_postgres_uri(), 
+                min_size=1, 
+                max_size=10,
+                kwargs=connection_kwargs  # <-- Esto soluciona el error de transacción
+            )
+            
             checkpointer = PostgresSaver(pool)
-            checkpointer.setup()
+            checkpointer.setup() # Crea las tablas si no existen
             logger.info("✅ PostgreSQL Persistence ON")
         except Exception as e:
             logger.warning(f"⚠️ PostgreSQL falló ({e}), usando MemorySaver")
-
-    return workflow.compile(checkpointer=checkpointer)
 
 
 # ========================================
