@@ -43,7 +43,7 @@ ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "cfa_documents")
 # - ~200x más económico ($0.02/M tokens vs $4/M tokens)
 # - Calidad suficiente para mayoría de casos de uso
 # Si necesitas máxima precisión, cambiar manualmente a text-embedding-3-large
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
 
 # Auto-detectar dimensiones según modelo
 _model_name = EMBEDDING_MODEL.lower()
