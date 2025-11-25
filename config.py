@@ -323,7 +323,7 @@ CIRCUIT_BREAKER_COOLDOWN = 10
 
 POSTGRES_URI = os.getenv(
     "POSTGRES_URI",
-    "postgresql://postgres:postgres@localhost:5432/cfaagent_db"
+    "postgresql://postgres:Claudia_400@34.9.11.83:5432/postgres"
 )
 
 # Flag para habilitar/deshabilitar persistencia PostgreSQL
