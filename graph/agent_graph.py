@@ -10,6 +10,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 import streamlit as st
 from datetime import datetime
+# graph/agent_graph.py
+
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage  # <--- Agregar SystemMessage
+from pydantic import BaseModel, Field  # <--- Nuevo
+from typing import Literal             # <--- Nuevo
+from config import get_llm             # <--- Asegurar que esto esté importado
+
+
 
 # Importar de config
 from config import (
@@ -51,7 +59,20 @@ class AgentState(TypedDict):
 # ========================================
 # HELPERS: DETECCIÓN DE ERRORES (ACTUALIZADO)
 # ========================================
+# graph/agent_graph.py
 
+# === CLASE PARA SALIDA ESTRUCTURADA (SUPERVISOR v2) ===
+class DecisionSupervisor(BaseModel):
+    """Estructura de decisión del supervisor para clasificación y optimización."""
+    categoria: Literal["TEORICA", "PRACTICA", "AYUDA"] = Field(
+        description="Categoría de la intención del usuario: TEORICA (conceptos), PRACTICA (cálculos), AYUDA (soporte)."
+    )
+    query_optimizada: str = Field(
+        description="La consulta del usuario reescrita y optimizada para búsqueda vectorial (traducida al inglés si es necesario, con términos técnicos CFA y sin ruido)."
+    )
+    razonamiento: str = Field(
+        description="Breve justificación de la clasificación y optimización."
+    )
 def detect_error_type(message: AIMessage) -> str:
     """
     Detecta el tipo de error en un mensaje de agente.
@@ -202,20 +223,24 @@ def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
 # NODO SUPERVISOR (PRINCIPAL)
 # ========================================
 
+# graph/agent_graph.py
+
 def supervisor_node(state: AgentState) -> dict:
-    """Supervisor con clasificación simple teoría/práctica/ayuda."""
-    logger.info("--- SUPERVISOR (CLASIFICACIÓN SIMPLE) ---")
+    """
+    Supervisor Inteligente v2: Clasifica y Optimiza en un solo paso (Single-Shot).
+    """
+    logger.info("--- SUPERVISOR (CLASIFICACIÓN + OPTIMIZACIÓN) ---")
 
     messages = state.get('messages', [])
     error_count = state.get('error_count', 0)
     error_types = state.get('error_types', {})
 
-    # 1. Chequeo Circuit Breaker (mantener lógica actual)
+    # 1. Chequeo Circuit Breaker (Lógica existente)
     cb_status = _check_circuit_breaker_status(state)
     if cb_status:
         return cb_status
 
-    # 2. Si último mensaje no es del usuario, analizar errores
+    # 2. Análisis de errores previos (Lógica existente)
     if not messages or not isinstance(messages[-1], HumanMessage):
         is_error, error_type, delta_count, delta_types = _analyze_last_message(messages)
 
@@ -231,68 +256,82 @@ def supervisor_node(state: AgentState) -> dict:
 
         return {"next_node": "FINISH", "error_count": error_count, "error_types": error_types}
 
-    # 3. CLASIFICACIÓN SIMPLE (NUEVA LÓGICA)
+    # === 3. CLASIFICACIÓN Y OPTIMIZACIÓN UNIFICADA ===
+    
     user_query = messages[-1].content
+    
+    # Prompt optimizado para RAG y Clasificación simultánea
+    prompt_sistema = """Eres el Supervisor Senior de un sistema de Agentes Financieros CFA.
+    Tu misión es doble:
+    1. CLASIFICAR la intención:
+       - **TEORICA**: Conceptos, definiciones, "qué es", "explica". (Requiere RAG)
+       - **PRACTICA**: Cálculos numéricos, "calcula", "determina". (Requiere Especialista)
+       - **AYUDA**: "¿Qué puedes hacer?", "Ayuda".
 
-    prompt_clasificacion = """Clasifica esta consulta financiera en UNA categoría:
-
-**TEORICA**: Si pregunta conceptos, definiciones, explicaciones
-- Palabras clave: "qué es", "explica", "define", "concepto", "significado", "what is", "explain", "define"
-- Ejemplo: "¿Qué es el WACC?", "Explica duration modificada"
-
-**PRACTICA**: Si solicita cálculos, tiene números, pide resultados específicos
-- Palabras clave: "calcula", "determina", "obtén", "encuentra", contiene números
-- Ejemplo: "Calcula VAN: inversión 100k, flujos [30k,40k], tasa 10%"
-
-**AYUDA**: Si pregunta qué puede hacer el sistema o pide ayuda
-- Palabras clave: "ayuda", "qué puedes hacer", "ejemplos", "help"
-- Ejemplo: "¿Qué puedes calcular?", "Ayuda"
-
-Consulta: "{query}"
-
-Responde SOLO UNA PALABRA en mayúsculas: TEORICA, PRACTICA o AYUDA
-No des explicaciones, solo la categoría."""
-
-    clasificacion_msg = prompt_clasificacion.format(query=user_query)
-
+    2. OPTIMIZAR la consulta para búsqueda vectorial (Elasticsearch):
+       - Si es TEORICA: Traduce al INGLÉS (el material CFA está en inglés), elimina palabras vacías, añade sinónimos técnicos.
+         Ej: "¿Qué es el WACC?" -> "WACC definition weighted average cost of capital formula components"
+       - Si es PRACTICA: Extrae y limpia los parámetros numéricos y el objetivo.
+       - Si es AYUDA: Déjala simple.
+    """
+    
     try:
-        # Usar LLM con temperatura 0 para determinismo
-        from config import get_llm
-        llm_clasificador = get_llm()
-        clasificacion = llm_clasificador.invoke(clasificacion_msg).content.strip().upper()
-        logger.info(f"🏷️ Clasificación: {clasificacion}")
+        # Usamos structured output para garantizar el formato JSON y la optimización
+        llm_supervisor = get_llm().with_structured_output(DecisionSupervisor)
+        
+        decision = llm_supervisor.invoke([
+            SystemMessage(content=prompt_sistema),
+            HumanMessage(content=user_query)
+        ])
+        
+        logger.info(f"🏷️  Categoría: {decision.categoria}")
+        logger.info(f"🔍 Query Original: {user_query}")
+        logger.info(f"🚀 Query Optimizada: {decision.query_optimizada}")
+        
     except Exception as e:
-        logger.error(f"❌ Error en clasificación: {e}")
-        clasificacion = "PRACTICA"  # Fallback seguro
+        logger.error(f"❌ Error en supervisor estructurado: {e}")
+        # Fallback de seguridad
+        decision = DecisionSupervisor(
+            categoria="PRACTICA", 
+            query_optimizada=user_query, 
+            razonamiento="Error en clasificación, fallback a práctica."
+        )
 
-    # 4. ROUTING BASADO EN CLASIFICACIÓN
-    if "TEORICA" in clasificacion or "TEÓRICA" in clasificacion:
-        logger.info("📚 Ruta: TEORICA → Agente_RAG")
+    # === 4. ENRUTAMIENTO Y GESTIÓN DE ESTADO ===
+    
+    if decision.categoria == "TEORICA":
+        logger.info("📚 Ruta: TEORICA -> Agente_RAG (Inyectando query optimizada)")
+        
+        # NOTA TÉCNICA CRÍTICA:
+        # Tu grafo usa un reducer 'messages: x + y' (concatenación).
+        # NO podemos reemplazar la lista entera o duplicaríamos el historial.
+        # Solución: Añadimos la query optimizada como un NUEVO mensaje.
+        # El Agente_RAG leerá este último mensaje como la instrucción más reciente.
+        
         return {
             "next_node": "Agente_RAG",
-            "error_count": 0,  # Reset en nuevo intent
-            "error_types": {},
-            "routing_method": "clasificacion_llm",
-            "routing_confidence": 0.95
+            "messages": [HumanMessage(content=decision.query_optimizada)], # Se apende al historial
+            "error_count": 0,
+            "error_types": {}
         }
 
-    elif "AYUDA" in clasificacion:
-        logger.info("ℹ️ Ruta: AYUDA → Agente_Ayuda")
+    elif decision.categoria == "AYUDA":
+        logger.info("ℹ️ Ruta: AYUDA -> Agente_Ayuda")
         return {
             "next_node": "Agente_Ayuda",
             "error_count": 0,
-            "error_types": {},
-            "routing_method": "clasificacion_llm",
-            "routing_confidence": 0.95
+            "error_types": {}
         }
 
-    else:  # PRACTICA (default)
-        logger.info("🔢 Ruta: PRACTICA → Supervisor decide agente especialista")
-
-        # Usar lógica supervisor original para decidir agente especialista
+    else: # PRACTICA (Default)
+        logger.info("🔢 Ruta: PRACTICA -> Supervisor decide especialista")
+        
+        # Para casos prácticos, usamos la lógica de routing especialista existente.
+        # Nota: Pasamos el estado original, los especialistas suelen preferir
+        # ver la query original con los números tal cual los escribió el usuario.
         next_node, method, confidence = _execute_routing_decision(state, messages)
-
-        # Reset errores si routing cambió
+        
+        # Reset de errores si cambiamos de nodo
         prev_node = state.get('next_node')
         if next_node == "FINISH" or next_node != prev_node:
             if error_count > 0:
@@ -306,8 +345,6 @@ No des explicaciones, solo la categoría."""
             "routing_method": "clasificacion_practica",
             "routing_confidence": confidence
         }
-
-
 # ========================================
 # CONSTRUCCIÓN DEL GRAFO
 # ========================================
