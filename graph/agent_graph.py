@@ -405,6 +405,7 @@ def build_graph():
             logger.info("✅ PostgreSQL Persistence ON")
         except Exception as e:
             logger.warning(f"⚠️ PostgreSQL falló ({e}), usando MemorySaver")
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # ========================================
