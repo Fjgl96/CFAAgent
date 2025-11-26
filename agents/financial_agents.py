@@ -179,6 +179,10 @@ def crear_agente_especialista(llm_instance, tools_list, system_prompt_text):
 # Este bloque actualiza a TODOS los agentes para que sepan rechazar teoría
 PROTOCOLO_SEGURIDAD = """
 **PROTOCOLO DE SEGURIDAD Y CIERRE (OBLIGATORIO):**
+0. **ECONOMÍA DE ACCIÓN:**
+   - Tu objetivo es responder ÚNICA y EXCLUSIVAMENTE lo que el usuario preguntó.
+   - NO realices cálculos adicionales no solicitados (ej: si piden VAN, no calcules TIR).
+   - Sé directo y conciso
 
 1. **FILTRO DE TEORÍA (CRÍTICO - EVITA EL BUCLE):**
    - Si el usuario pregunta "¿Qué es...?", "Explica...", "Definición de..." y NO pide un cálculo numérico específico:
