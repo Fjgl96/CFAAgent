@@ -450,7 +450,7 @@ python test_simple_routing.py
 ### Microservicio RAG no responde
 **Solución**: Verificar que el servicio esté activo
 ```bash
-curl https://tu-microservicio.run.app/health
+curl https://rag-service-740905672912.us-central1.run.app/health
 ```
 
 ### PostgreSQL connection refused
