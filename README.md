@@ -204,7 +204,7 @@ OPENAI_API_KEY=sk-proj-xxx
 GOOGLE_API_KEY=AIzaSyxxx  # Opcional
 
 # Microservicio RAG
-RAG_API_URL=https://tu-microservicio.run.app
+RAG_API_URL=[https://rag-service-740905672912.us-central1.run.app]
 
 # PostgreSQL (opcional)
 ENABLE_POSTGRES_PERSISTENCE=true
