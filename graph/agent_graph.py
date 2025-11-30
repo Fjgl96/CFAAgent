@@ -223,131 +223,236 @@ def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
 # NODO SUPERVISOR (PRINCIPAL)
 # ========================================
 
+def extraer_query_con_contexto(messages: list, window_size: int = 2) -> str:
+    """
+    Extrae la última query del usuario CON contexto limitado.
+    
+    Args:
+        messages: Historial completo
+        window_size: Número de turnos previos a incluir (default: 2)
+    
+    Returns:
+        Query enriquecida con contexto relevante
+    """
+    
+    # 1. Encontrar última query del usuario
+    last_user_msg = None
+    last_user_idx = None
+    
+    for idx in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[idx], HumanMessage):
+            last_user_msg = messages[idx].content
+            last_user_idx = idx
+            break
+    
+    if not last_user_msg:
+        return None
+    
+    # 2. Detectar si es un refinamiento (keywords clave)
+    refinamiento_keywords = [
+        "ahora", "pero", "con", "cambia", "modifica", "ajusta",
+        "en vez", "en lugar", "si fuera", "qué pasa si",
+        "y si", "con una", "con un", "usando"
+    ]
+    
+    query_lower = last_user_msg.lower()
+    es_refinamiento = any(kw in query_lower for kw in refinamiento_keywords)
+    
+    # 3. Si NO es refinamiento → Query aislada
+    if not es_refinamiento:
+        return last_user_msg
+    
+    # 4. Si ES refinamiento → Incluir contexto limitado
+    # Buscar los últimos N turnos (usuario + asistente)
+    context_messages = []
+    turn_count = 0
+    
+    for idx in range(last_user_idx - 1, -1, -1):
+        msg = messages[idx]
+        
+        # Solo incluir HumanMessage y AIMessage (ignorar tool calls)
+        if isinstance(msg, (HumanMessage, AIMessage)):
+            # Filtrar respuestas muy largas del asistente
+            if isinstance(msg, AIMessage):
+                content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                context_messages.insert(0, f"Asistente: {content}")
+            else:
+                context_messages.insert(0, f"Usuario: {msg.content}")
+            
+            if isinstance(msg, HumanMessage):
+                turn_count += 1
+                if turn_count >= window_size:
+                    break
+    
+    # 5. Construir query enriquecida
+    if context_messages:
+        context_str = "\n".join(context_messages)
+        enriched_query = f"""CONTEXTO PREVIO:
+        {context_str}
+
+        NUEVA CONSULTA:
+        {last_user_msg}"""
+        return enriched_query
+    else:
+        return last_user_msg
+
+
+
 # graph/agent_graph.py
 
-def supervisor_node(state: AgentState) -> dict:
-    """
-    Supervisor Inteligente v2: Clasifica y Optimiza en un solo paso (Single-Shot).
-    """
-    logger.info("--- SUPERVISOR (CLASIFICACIÓN + OPTIMIZACIÓN) ---")
 
+
+
+
+def supervisor_node(state: AgentState) -> dict:
+    """Supervisor v4: Aislamiento Inteligente + Clasificación 2 Niveles."""
+    
+    logger.info("--- SUPERVISOR v4 (AISLAMIENTO INTELIGENTE) ---")
+    
     messages = state.get('messages', [])
     error_count = state.get('error_count', 0)
     error_types = state.get('error_types', {})
-
-    # 1. Chequeo Circuit Breaker (Lógica existente)
+    
+    # 1. Circuit Breaker
     cb_status = _check_circuit_breaker_status(state)
     if cb_status:
         return cb_status
-
-    # 2. Análisis de errores previos (Lógica existente)
+    
+    # 2. Análisis de errores previos
     if not messages or not isinstance(messages[-1], HumanMessage):
         is_error, error_type, delta_count, delta_types = _analyze_last_message(messages)
-
         if is_error:
             error_count += delta_count
             for k, v in delta_types.items():
                 error_types[k] = error_types.get(k, 0) + v
-
             if should_open_circuit(error_types, error_count):
                 activation = _handle_circuit_breaker_activation(error_types, error_count)
                 activation.update({"error_count": error_count, "error_types": error_types})
                 return activation
-
         return {"next_node": "FINISH", "error_count": error_count, "error_types": error_types}
-
-    # === 3. CLASIFICACIÓN Y OPTIMIZACIÓN UNIFICADA ===
     
-    user_query = messages[-1].content
+    # === 3. EXTRACCIÓN INTELIGENTE DE QUERY ===
+    query_procesada = extraer_query_con_contexto(messages, window_size=2)
     
-    # Prompt optimizado para RAG y Clasificación simultánea
-    prompt_sistema = """Eres el Supervisor Senior de un sistema de Agentes Financieros CFA.
-    Tu misión es doble:
-    1. CLASIFICAR la intención:
-       - **TEORICA**: Conceptos, definiciones, "qué es", "explica". (Requiere RAG)
-       - **PRACTICA**: Cálculos numéricos, "calcula", "determina". (Requiere Especialista)
-       - **AYUDA**: "¿Qué puedes hacer?", "Ayuda".
+    if not query_procesada:
+        return {"next_node": "FINISH", "error_count": error_count}
+    
+    logger.info(f"📝 Query procesada ({len(query_procesada)} chars)")
+    
+    # === 4. CLASIFICACIÓN NIVEL 1: TEORICA/PRACTICA/AYUDA ===
+    prompt_nivel1 = """Clasifica esta consulta financiera:
 
-    2. OPTIMIZAR la consulta para búsqueda vectorial (Elasticsearch):
-       - Si es TEORICA: Traduce al INGLÉS (el material CFA está en inglés), elimina palabras vacías, añade sinónimos técnicos.
-         Ej: "¿Qué es el WACC?" -> "WACC definition weighted average cost of capital formula components"
-       - Si es PRACTICA: Extrae y limpia los parámetros numéricos y el objetivo.
-       - Si es AYUDA: Déjala simple.
-    """
+CATEGORÍAS:
+- TEORICA: Preguntas conceptuales, definiciones
+- PRACTICA: Cálculos numéricos, modificaciones de cálculos previos
+- AYUDA: Solicitudes de ayuda
+
+IMPORTANTE: Si la consulta modifica parámetros de un cálculo previo ("ahora con...", "pero si..."), 
+clasifícala como PRACTICA.
+
+Responde SOLO: TEORICA, PRACTICA, o AYUDA"""
     
     try:
-        # Usamos structured output para garantizar el formato JSON y la optimización
-        llm_supervisor = get_llm().with_structured_output(DecisionSupervisor)
-        
-        decision = llm_supervisor.invoke([
-            SystemMessage(content=prompt_sistema),
-            HumanMessage(content=user_query)
+        categoria_msg = get_llm().invoke([
+            SystemMessage(content=prompt_nivel1),
+            HumanMessage(content=query_procesada)
         ])
-        
-        logger.info(f"🏷️  Categoría: {decision.categoria}")
-        logger.info(f"🔍 Query Original: {user_query}")
-        logger.info(f"🚀 Query Optimizada: {decision.query_optimizada}")
+        categoria = categoria_msg.content.strip().upper()
+        logger.info(f"🏷️ Categoría: {categoria}")
         
     except Exception as e:
-        logger.error(f"❌ Error en supervisor estructurado: {e}")
-        # Fallback de seguridad
-        decision = DecisionSupervisor(
-            categoria="PRACTICA", 
-            query_optimizada=user_query, 
-            razonamiento="Error en clasificación, fallback a práctica."
-        )
-
-    # === 4. ENRUTAMIENTO Y GESTIÓN DE ESTADO ===
+        logger.error(f"Error clasificación L1: {e}")
+        categoria = "PRACTICA"
     
-    if decision.categoria == "TEORICA":
-        logger.info("📚 Ruta: TEORICA -> Agente_RAG (Inyectando query optimizada)")
-        
-        # NOTA TÉCNICA CRÍTICA:
-        # Tu grafo usa un reducer 'messages: x + y' (concatenación).
-        # NO podemos reemplazar la lista entera o duplicaríamos el historial.
-        # Solución: Añadimos la query optimizada como un NUEVO mensaje.
-        # El Agente_RAG leerá este último mensaje como la instrucción más reciente.
-        
+    # === 5. ROUTING SEGÚN CATEGORÍA ===
+    
+    if categoria == "TEORICA":
+        # Query original (sin contexto) para RAG
+        last_user_query = messages[-1].content
         return {
             "next_node": "Agente_RAG",
-            "messages": [HumanMessage(content=decision.query_optimizada)], # Se apende al historial
+            "messages": [HumanMessage(content=last_user_query)],
             "error_count": 0,
             "error_types": {}
         }
-
-    elif decision.categoria == "AYUDA":
-        logger.info("ℹ️ Ruta: AYUDA -> Agente_Ayuda")
+    
+    elif categoria == "AYUDA":
         return {
             "next_node": "Agente_Ayuda",
             "error_count": 0,
             "error_types": {}
         }
+    
+    else:  # PRACTICA
+        # === 6. CLASIFICACIÓN NIVEL 2: ESPECIALISTA ===
+        prompt_nivel2 = f"""Determina el agente especialista para esta consulta financiera.
 
-    else: # PRACTICA (Default)
-        logger.info("🔢 Ruta: PRACTICA -> Supervisor decide especialista")
-        
-        # Para casos prácticos, usamos la lógica de routing especialista existente.
-        # Nota: Pasamos el estado original, los especialistas suelen preferir
-        # ver la query original con los números tal cual los escribió el usuario.
-        next_node, method, confidence = _execute_routing_decision(state, messages)
-        
-        # Reset de errores si cambiamos de nodo
-        prev_node = state.get('next_node')
-        if next_node == "FINISH" or next_node != prev_node:
-            if error_count > 0:
-                error_count = 0
-                error_types = {}
+        CONSULTA (puede incluir contexto de cálculo previo):
+        {query_procesada}
 
-        return {
-            "next_node": next_node,
-            "error_count": error_count,
-            "error_types": error_types,
-            "routing_method": "clasificacion_practica",
-            "routing_confidence": confidence
-        }
-# ========================================
-# CONSTRUCCIÓN DEL GRAFO
-# ========================================
+        AGENTES DISPONIBLES:
+        - Agente_Renta_Fija: Bonos, duration, convexity, cupón, YTM, valoración de bonos
+        - Agente_Finanzas_Corp: VAN, TIR, WACC, payback, profitability index
+        - Agente_Equity: Valuación de acciones, Gordon Growth, dividendos
+        - Agente_Portafolio: CAPM, Sharpe, Treynor, Jensen, beta, riesgo
+        - Agente_Derivados: Opciones call/put, Black-Scholes, volatilidad
+
+        INSTRUCCIONES:
+        - Si hay contexto previo, mantén la coherencia (ej: si antes era bono, sigue siendo Renta Fija)
+        - Si es refinamiento de parámetros, usa el mismo agente del cálculo original
+        - Responde EXACTAMENTE: "Agente_XXXXX" (sin explicaciones ni puntuación)
+
+        AGENTE:"""
+        
+        try:
+            especialista_msg = get_llm().invoke([
+                SystemMessage(content=prompt_nivel2),
+                HumanMessage(content=query_procesada)
+            ])
+            next_node = especialista_msg.content.strip()
+            
+            # Validación
+            agentes_validos = [
+                "Agente_Renta_Fija", "Agente_Finanzas_Corp",
+                "Agente_Equity", "Agente_Portafolio", "Agente_Derivados"
+            ]
+            
+            if next_node not in agentes_validos:
+                logger.warning(f"⚠️ Respuesta inválida: '{next_node}'")
+                
+                # Fallback con keywords (considerando contexto)
+                combined_text = query_procesada.lower()
+                
+                if any(kw in combined_text for kw in ["bono", "bond", "cupón", "coupon", "duration", "ytm"]):
+                    next_node = "Agente_Renta_Fija"
+                elif any(kw in combined_text for kw in ["van", "npv", "tir", "irr", "wacc"]):
+                    next_node = "Agente_Finanzas_Corp"
+                elif any(kw in combined_text for kw in ["capm", "sharpe", "beta", "portafolio"]):
+                    next_node = "Agente_Portafolio"
+                elif any(kw in combined_text for kw in ["opción", "option", "call", "put", "black"]):
+                    next_node = "Agente_Derivados"
+                elif any(kw in combined_text for kw in ["acción", "stock", "gordon", "dividendo"]):
+                    next_node = "Agente_Equity"
+                else:
+                    next_node = "Agente_Finanzas_Corp"
+            
+            logger.info(f"🎯 Especialista seleccionado: {next_node}")
+            
+            return {
+                "next_node": next_node,
+                "error_count": 0,
+                "error_types": {},
+                "routing_method": "aislamiento_inteligente_2niveles"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error clasificación L2: {e}")
+            return {
+                "next_node": "Agente_Finanzas_Corp",
+                "error_count": error_count,
+                "error_types": error_types
+            }
+
 
 def build_graph():
     """Construye el grafo con persistencia."""
