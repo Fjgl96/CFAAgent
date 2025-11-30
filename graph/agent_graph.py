@@ -222,13 +222,23 @@ def _execute_routing_decision(state: AgentState, messages: list) -> tuple:
 # ========================================
 # NODO SUPERVISOR (PRINCIPAL)
 # ========================================
+
 def extraer_query_con_contexto(
     messages: list, 
     window_size: int = 2,
     categoria_actual: str = None  # ← NUEVO PARÁMETRO
-    ) -> str:
+) -> str:
     """
     Extrae la última query del usuario CON contexto limitado y FILTRADO.
+    
+    Args:
+        messages: Historial completo
+        window_size: Número de turnos previos a incluir (default: 2)
+        categoria_actual: "TEORICA", "PRACTICA", o None
+                         Si es "PRACTICA", filtra contexto teórico
+    
+    Returns:
+        Query procesada (aislada o enriquecida con contexto relevante)
     """
     
     # 1. Encontrar última query del usuario
@@ -242,10 +252,7 @@ def extraer_query_con_contexto(
             break
     
     if not last_user_msg:
-        try:
-            logger.warning("⚠️ No se encontró mensaje del usuario")
-        except:
-            pass
+        logger.warning("⚠️ No se encontró mensaje del usuario")
         return None
     
     # 2. Detectar si es un refinamiento (keywords clave)
@@ -260,17 +267,11 @@ def extraer_query_con_contexto(
     
     # 3. Si NO es refinamiento → Query aislada
     if not es_refinamiento:
-        try:
-            logger.info("📤 Query aislada (sin contexto)")
-        except:
-            pass
+        logger.info("📤 Query aislada (sin contexto)")
         return last_user_msg
     
     # 4. Si ES refinamiento → Incluir contexto limitado Y FILTRADO
-    try:
-        logger.info(f"📥 Extrayendo contexto (window={window_size}, cat={categoria_actual})")
-    except:
-        pass
+    logger.info(f"📥 Extrayendo contexto (window={window_size}, cat={categoria_actual})")
     
     context_messages = []
     turn_count = 0
@@ -297,10 +298,7 @@ def extraer_query_con_contexto(
                 es_pregunta_teorica = any(kw in msg_lower for kw in teoricas_keywords)
                 
                 if es_pregunta_teorica:
-                    try:
-                        logger.info(f"⏭️ Saltando contexto teórico: '{msg.content[:50]}...'")
-                    except:
-                        pass
+                    logger.info(f"⏭️ Saltando contexto teórico: '{msg.content[:50]}...'")
                     continue  # ← SALTAR mensaje teórico
             
             # Si pasa filtro, agregar
@@ -324,34 +322,33 @@ def extraer_query_con_contexto(
 
         NUEVA CONSULTA:
         {last_user_msg}"""
+                
+        logger.info(f"✅ Query enriquecida ({len(enriched_query)} chars)")
         return enriched_query
     else:
+        logger.info("⚠️ Sin contexto relevante, retornando query aislada")
         return last_user_msg
+# graph/agent_graph.py
+
 
 
 def supervisor_node(state: AgentState) -> dict:
-    """
-    Supervisor v4.3: 
-    - Detección precisa de Teoría vs Práctica.
-    - Limpieza de contexto (corte) para definiciones.
-    - Enrutamiento Nivel 2 (Especialistas) preservado.
-    """
+    """Supervisor v4.2: Idioma correcto + Filtrado inteligente."""
     
     logger.info("=" * 70)
-    logger.info("--- SUPERVISOR v4.3 (OPTIMIZADO) ---")
+    logger.info("--- SUPERVISOR v4.2 (ESPAÑOL PARA PRACTICA) ---")
     logger.info("=" * 70)
     
     messages = state.get('messages', [])
     error_count = state.get('error_count', 0)
     error_types = state.get('error_types', {})
     
-    # ========================================================================
-    # 1. CIRCUIT BREAKER & ERROR HANDLING (PRESERVADO)
-    # ========================================================================
+    # 1. Circuit Breaker
     cb_status = _check_circuit_breaker_status(state)
     if cb_status:
         return cb_status
     
+    # 2. Análisis de errores previos
     if not messages or not isinstance(messages[-1], HumanMessage):
         is_error, error_type, delta_count, delta_types = _analyze_last_message(messages)
         if is_error:
@@ -365,26 +362,24 @@ def supervisor_node(state: AgentState) -> dict:
         return {"next_node": "FINISH", "error_count": error_count, "error_types": error_types}
     
     # ========================================================================
-    # 2. OBTENER QUERY ORIGINAL
+    # 3. OBTENER QUERY ORIGINAL (sin procesar todavía)
     # ========================================================================
+    
     last_user_query_raw = messages[-1].content
     logger.info(f"📝 Query original: {last_user_query_raw[:80]}...")
     
     # ========================================================================
-    # 3. CLASIFICACIÓN DE INTENCIÓN (LÓGICA MEJORADA)
+    # 4. PRE-CLASIFICACIÓN (para decidir filtrado y idioma)
     # ========================================================================
     
-    prompt_preclasificacion = """Analiza la intención del usuario y clasifica en UNA categoría:
+    prompt_preclasificacion = """Clasifica esta consulta en UNA categoría:
 
     CATEGORÍAS:
-    - TEORICA: Preguntas de "Qué es", definiciones, conceptos, fórmulas o explicaciones (incluso si preguntan por términos matemáticos como "mediana", "WACC", "tasa").
-    - PRACTICA: Solicitudes EXPLÍCITAS de realizar un cálculo, computar un valor o usar datos numéricos.
-    - AYUDA: Saludos o solicitudes de soporte.
+    - TEORICA: Preguntas conceptuales, definiciones
+    - PRACTICA: Cálculos numéricos, ejercicios con datos
+    - AYUDA: Solicitudes de ayuda
 
-    INSTRUCCIÓN CLAVE:
-    Si la pregunta es "¿Qué es X?" o "Define X", SIEMPRE es TEORICA, aunque X sea un indicador financiero.
-
-    Responde SOLO una palabra: TEORICA, PRACTICA, o AYUDA"""
+    Responde SOLO: TEORICA, PRACTICA, o AYUDA"""
         
     try:
         preclasif_msg = get_llm().invoke([
@@ -392,80 +387,88 @@ def supervisor_node(state: AgentState) -> dict:
             HumanMessage(content=last_user_query_raw)
         ])
         categoria = preclasif_msg.content.strip().upper()
-        # Limpieza básica por si el LLM devuelve puntuación
-        categoria = categoria.replace(".", "").replace("CATEGORIA:", "").strip()
-        
-        logger.info(f"🏷️ Clasificación: {categoria}")
+        logger.info(f"🏷️ Pre-clasificación: {categoria}")
         
         if categoria not in ["TEORICA", "PRACTICA", "AYUDA"]:
-            logger.warning(f"⚠️ Categoría ambigua '{categoria}', asumiendo PRACTICA por seguridad")
+            logger.warning(f"⚠️ Categoría inválida '{categoria}', asumiendo PRACTICA")
             categoria = "PRACTICA"
             
     except Exception as e:
-        logger.error(f"❌ Error en clasificación: {e}")
+        logger.error(f"❌ Error en pre-clasificación: {e}")
         categoria = "PRACTICA"
     
     # ========================================================================
-    # 4. EXTRACCIÓN DE CONTEXTO INTELIGENTE (EL "CORTE")
+    # 5. EXTRACCIÓN INTELIGENTE CON FILTRADO
     # ========================================================================
     
-    # Palabras que indican que el usuario SÍ quiere hablar del resultado anterior
-    keywords_referencia = ["ese", "esa", "esto", "resultado", "anterior", "calculado", "dio", "salio", "por qué", "porque"]
-    
-    hace_referencia_al_pasado = any(kw in last_user_query_raw.lower() for kw in keywords_referencia)
-
-    if categoria == "TEORICA" and not hace_referencia_al_pasado:
-        # CASO "DEFINE LA MEDIANA": Cortamos el contexto numérico para no ensuciar
-        logger.info("✂️ CORTE DE CONTEXTO: Consulta teórica pura detectada. Ignorando historial.")
-        query_procesada = last_user_query_raw
-    else:
-        # CASO NORMAL (Práctica o Teoría sobre el resultado): Inyectamos contexto
-        query_procesada = extraer_query_con_contexto(
-            messages=messages,
-            window_size=2,
-            categoria_actual=categoria
-        )
+    query_procesada = extraer_query_con_contexto(
+        messages=messages,
+        window_size=2,
+        categoria_actual=categoria  # ← NUEVO: filtrar por categoría
+    )
     
     if not query_procesada:
         logger.error("❌ No se pudo extraer query")
         return {"next_node": "FINISH", "error_count": error_count}
     
+    logger.info(f"📊 Query procesada: {len(query_procesada)} chars")
+    
     # ========================================================================
-    # 5. ROUTING (PRESERVADO)
+    # 6. ROUTING SEGÚN CATEGORÍA
     # ========================================================================
     
     if categoria == "TEORICA":
-        logger.info("📚 Query TEORICA → Agente_RAG")
+        # ====================================================================
+        # TEORICA: Mantener ESPAÑOL (tu RAG funciona en español)
+        # ====================================================================
+        
+        logger.info("📚 Query TEORICA → Agente_RAG (español original)")
+        
         return {
             "next_node": "Agente_RAG",
-            "messages": [HumanMessage(content=query_procesada)],
-            "error_count": 0, "error_types": {}
+            "messages": [HumanMessage(content=query_procesada)],  # ← ESPAÑOL
+            "error_count": 0,
+            "error_types": {},
+            "routing_method": "categoria_teorica"
         }
     
     elif categoria == "AYUDA":
         logger.info("❓ Query AYUDA → Agente_Ayuda")
+        
         return {
             "next_node": "Agente_Ayuda",
-            "messages": [HumanMessage(content=query_procesada)],
-            "error_count": 0, "error_types": {}
+            "messages": [HumanMessage(content=query_procesada)],  # ← ESPAÑOL
+            "error_count": 0,
+            "error_types": {},
+            "routing_method": "categoria_ayuda"
         }
     
-    else:  # PRACTICA - AQUÍ ESTÁ LA LÓGICA NIVEL 2 QUE NO DEBEMOS PERDER
-        logger.info("🧮 Query PRACTICA → Clasificación L2 (Especialistas)")
+    else:  # PRACTICA
+        # ====================================================================
+        # PRACTICA: MANTENER ESPAÑOL (coherencia con prompts de agentes)
+        # ====================================================================
+        
+        logger.info("🧮 Query PRACTICA → Clasificación L2 (español original)")
         
         prompt_nivel2 = f"""Determina el agente especialista para esta consulta financiera.
 
-        CONSULTA:
+        CONSULTA (EN ESPAÑOL, puede incluir contexto):
         {query_procesada}
 
-        AGENTES DISPONIBLES:
-        - Agente_Renta_Fija: Bonos, duration, convexity, cupón, YTM.
-        - Agente_Finanzas_Corp: VAN, TIR, WACC, payback.
-        - Agente_Equity: Valuación acciones, Gordon.
-        - Agente_Portafolio: CAPM, Sharpe, Treynor, Beta, Mediana, Promedio, Varianza.
-        - Agente_Derivados: Opciones, Black-Scholes.
+            AGENTES DISPONIBLES:
+            - Agente_Renta_Fija: Bonos, duration, convexity, cupón, YTM, valoración de bonos
+            - Agente_Finanzas_Corp: VAN, TIR, WACC, payback, profitability index
+            - Agente_Equity: Valuación de acciones, Gordon Growth, dividendos
+            - Agente_Portafolio: CAPM, Sharpe, Treynor, Jensen, beta, riesgo
+            - Agente_Derivados: Opciones call/put, Black-Scholes, volatilidad
 
-        Responde EXACTAMENTE: "Agente_XXXXX" """
+            INSTRUCCIONES:
+            - Si hay contexto previo, mantén coherencia con agente original
+            - Si es refinamiento ("ahora con...", "pero..."), usa MISMO agente del cálculo previo
+            - Si es nuevo tema, prioriza keywords del nuevo tema
+            - Responde EXACTAMENTE: "Agente_XXXXX" (sin explicaciones)
+
+            AGENTE:"""
         
         try:
             especialista_msg = get_llm().invoke([
@@ -474,39 +477,64 @@ def supervisor_node(state: AgentState) -> dict:
             ])
             next_node = especialista_msg.content.strip()
             
-            # Validación de seguridad
+            # Validación
             agentes_validos = [
                 "Agente_Renta_Fija", "Agente_Finanzas_Corp",
                 "Agente_Equity", "Agente_Portafolio", "Agente_Derivados"
             ]
             
             if next_node not in agentes_validos:
-                logger.warning(f"⚠️ Respuesta L2 inválida: '{next_node}'. Usando fallback.")
-                # Fallback simple de keywords por si el LLM alucina el nombre
-                combined = query_procesada.lower()
-                if "bono" in combined: next_node = "Agente_Renta_Fija"
-                elif "opcion" in combined: next_node = "Agente_Derivados"
-                elif any(x in combined for x in ["capm", "beta", "mediana", "promedio"]): next_node = "Agente_Portafolio"
-                else: next_node = "Agente_Finanzas_Corp"
+                logger.warning(f"⚠️ Respuesta L2 inválida: '{next_node}'")
+                logger.info("🔄 Activando fallback con keywords...")
+                
+                # Fallback: keywords en español
+                combined_text = query_procesada.lower()
+                
+                if any(kw in combined_text for kw in [
+                    "bono", "cupón", "duration", "ytm", "convexity"
+                ]):
+                    next_node = "Agente_Renta_Fija"
+                elif any(kw in combined_text for kw in [
+                    "van", "tir", "wacc", "payback", "profitability"
+                ]):
+                    next_node = "Agente_Finanzas_Corp"
+                elif any(kw in combined_text for kw in [
+                    "capm", "sharpe", "beta", "portafolio", "treynor"
+                ]):
+                    next_node = "Agente_Portafolio"
+                elif any(kw in combined_text for kw in [
+                    "opción", "call", "put", "black", "volatilidad"
+                ]):
+                    next_node = "Agente_Derivados"
+                elif any(kw in combined_text for kw in [
+                    "acción", "gordon", "dividendo", "equity"
+                ]):
+                    next_node = "Agente_Equity"
+                else:
+                    next_node = "Agente_Finanzas_Corp"
+                
+                logger.info(f"✅ Fallback seleccionó: {next_node}")
             
             logger.info(f"🎯 Especialista final: {next_node}")
             
             return {
                 "next_node": next_node,
-                "messages": [HumanMessage(content=query_procesada)],
-                "error_count": 0, "error_types": {}
+                "messages": [HumanMessage(content=query_procesada)],  # ← ESPAÑOL
+                "error_count": 0,
+                "error_types": {},
+                "routing_method": "practica_espanol_filtrado"
             }
             
         except Exception as e:
             logger.error(f"❌ Error en clasificación L2: {e}")
             return {
-                "next_node": "Agente_Finanzas_Corp", # Fallback último recurso
-                "messages": [HumanMessage(content=query_procesada)],
-                "error_count": error_count, "error_types": error_types
+                "next_node": "Agente_Finanzas_Corp",
+                "messages": [HumanMessage(content=query_procesada)],  # ← ESPAÑOL
+                "error_count": error_count,
+                "error_types": error_types,
+                "routing_method": "fallback_error"
             }
 
-
-            
 def build_graph():
     """Construye el grafo con persistencia."""
     logger.info("🏗️ Construyendo grafo...")
